@@ -91,17 +91,33 @@ def test_get_git_commit_output_format_identical_between_sources(tmp_path):
     assert all(c in "0123456789abcdef" for c in live)
 
 
-def test_get_git_commit_date_empty_when_git_fails(tmp_path):
-    """Docker image / pip wheel: no git → '' so the dump line drops the date."""
+def test_get_git_commit_date_uses_version_info(tmp_path):
+    """Source install: version_info carries the commit date from live git."""
+    from hermes_cli import dump
+
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+
+    with patch("hermes_cli.version_info._resolve_stamp_file", lambda: None), \
+         patch("hermes_cli.version_info._resolve_repo_dir", lambda: repo_dir), \
+         patch("hermes_cli.version_info._git_version_info",
+               return_value=VersionInfo("0.19.0", "0.19.0+3", 3, "deadbeef" * 5, "main", "git", False, 1718662620)):
+        _reset_version_info_cache()
+        date = dump._get_git_commit_date(repo_dir)
+
+    assert date == "2024-06-17"
+
+
+def test_get_git_commit_date_empty_when_unknown(tmp_path):
+    """Docker/pip: no git, no stamp → '' so the dump line drops the date."""
     from hermes_cli import dump
 
     repo_dir = tmp_path / "no-git-here"
     repo_dir.mkdir()
 
-    failed = MagicMock(returncode=128, stdout="")
-    with patch("hermes_cli.dump.subprocess.run", return_value=failed):
+    with patch("hermes_cli.version_info._resolve_stamp_file", lambda: None), \
+         patch("hermes_cli.version_info._resolve_repo_dir", lambda: None):
+        _reset_version_info_cache()
         date = dump._get_git_commit_date(repo_dir)
 
     assert date == ""
-
-

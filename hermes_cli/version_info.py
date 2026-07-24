@@ -33,6 +33,7 @@ class VersionInfo:
     branch: str | None
     source: Literal["git", "nix", "docker", "build", "unknown"]
     dirty: bool = False
+    commit_date: int | None = None
 
 
 def format_display_version(info: VersionInfo | None = None) -> str:
@@ -137,6 +138,10 @@ def _stamp_version_info() -> VersionInfo | None:
     else:
         source = "build"
 
+    commit_date = data.get("commitDate")
+    if not isinstance(commit_date, int):
+        commit_date = None
+
     return VersionInfo(
         base_version,
         display_version,
@@ -145,6 +150,7 @@ def _stamp_version_info() -> VersionInfo | None:
         data.get("branch") or None,
         source,
         bool(data.get("dirty")),
+        commit_date,
     )
 
 
@@ -156,6 +162,10 @@ def _git_version_info(repo_dir: Path) -> VersionInfo:
     branch = _run_git(repo_dir, "branch", "--show-current")
     if not branch and commit:
         branch = commit[:8]
+    commit_date_raw = _run_git(repo_dir, "log", "-1", "--format=%ct", "HEAD")
+    commit_date: int | None = None
+    if commit_date_raw and commit_date_raw.isdigit():
+        commit_date = int(commit_date_raw)
     try:
         dirty_result = subprocess.run(
             ["git", "status", "--porcelain"],
@@ -179,7 +189,7 @@ def _git_version_info(repo_dir: Path) -> VersionInfo:
             break
 
     return VersionInfo(
-        __version__, _derived_version(__version__, distance, dirty), distance, commit, branch, "git", dirty
+        __version__, _derived_version(__version__, distance, dirty), distance, commit, branch, "git", dirty, commit_date
     )
 
 

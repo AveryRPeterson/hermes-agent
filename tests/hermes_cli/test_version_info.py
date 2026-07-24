@@ -103,13 +103,14 @@ def test_get_version_info_counts_commits_after_semver_tag(tmp_path, monkeypatch)
             ("git", "branch", "--show-current"): "feature/version",
             ("git", "status", "--porcelain"): "",
             ("git", "rev-list", "--count", "v0.19.0..HEAD"): "3",
+            ("git", "log", "-1", "--format=%ct", "HEAD"): "1718662620",
         }[tuple(command)]
         return MagicMock(returncode=0, stdout=f"{output}\n")
 
     with patch("hermes_cli.version_info.subprocess.run", side_effect=run):
         info = get_version_info()
 
-    assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "b" * 40, "feature/version", "git")
+    assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "b" * 40, "feature/version", "git", False, 1718662620)
 
 
 def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkeypatch):
@@ -129,6 +130,7 @@ def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkey
             ("git", "branch", "--show-current"): "",
             ("git", "status", "--porcelain"): " M hermes_cli/version_info.py",
             ("git", "rev-list", "--count", "v2026.7.20..HEAD"): "2",
+            ("git", "log", "-1", "--format=%ct", "HEAD"): "1718662620",
         }[tuple(command)]
         return MagicMock(returncode=0, stdout=f"{output}\n")
 

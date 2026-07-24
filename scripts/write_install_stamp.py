@@ -83,6 +83,14 @@ def _resolve_branch_from_git() -> str | None:
     return branch if branch and branch != "HEAD" else None
 
 
+def _resolve_commit_date_from_git() -> int | None:
+    """Return the commit timestamp (Unix epoch seconds) of HEAD, or None."""
+    raw = _run_git("log", "-1", "--format=%ct", "HEAD")
+    if raw and raw.isdigit():
+        return int(raw)
+    return None
+
+
 def _resolve_dirty_from_git() -> bool:
     status = _run_git("status", "--porcelain", "-uno")
     return status is not None and len(status) > 0
@@ -116,6 +124,7 @@ def build_stamp(
     dirty: bool | None = None,
     base_version: str | None = None,
     distance: int | None = None,
+    commit_date: int | None = None,
     source: str = "local",
 ) -> dict:
     """Build a stamp dict from explicit args, filling gaps from git/env.
@@ -155,6 +164,10 @@ def build_stamp(
     if distance is None:
         distance = _compute_distance(base_version, _release_date)
 
+    # Commit date: explicit > git
+    if commit_date is None:
+        commit_date = _resolve_commit_date_from_git()
+
     # Display version
     display_version = base_version or ""
     if distance is not None and distance > 0:
@@ -165,6 +178,7 @@ def build_stamp(
     return {
         "schemaVersion": STAMP_SCHEMA_VERSION,
         "commit": commit,
+        "commitDate": commit_date,
         "branch": branch,
         "builtAt": datetime.now(timezone.utc).isoformat(),
         "dirty": dirty,
@@ -192,6 +206,7 @@ def main() -> int:
     parser.add_argument("--dirty", action="store_true", default=None, help="Mark as dirty")
     parser.add_argument("--base-version", default=None, help="Override base version")
     parser.add_argument("--distance", type=int, default=None, help="Override commit distance")
+    parser.add_argument("--commit-date", type=int, default=None, help="Override commit timestamp (Unix epoch seconds)")
     parser.add_argument("--source", default="local", help="Stamp source label")
     args = parser.parse_args()
 
@@ -202,6 +217,7 @@ def main() -> int:
         dirty=args.dirty,
         base_version=args.base_version,
         distance=args.distance,
+        commit_date=args.commit_date,
         source=args.source,
     )
 

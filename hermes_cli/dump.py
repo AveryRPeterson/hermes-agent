@@ -72,24 +72,20 @@ def _get_git_commit(project_root: Path) -> str:
 def _get_git_commit_date(project_root: Path) -> str:
     """Return the date the HEAD commit was authored (YYYY-MM-DD), or ''.
 
-    Resolves live via ``git log`` on source installs.  The published Docker
-    image excludes ``.git``, so this returns '' there — the dump line simply
-    drops the date suffix in that case (the baked SHA still identifies the
-    build).
+    Uses ``version_info.get_version_info()`` which carries the commit date
+    as a Unix timestamp from the install stamp (Docker/Nix) or live git
+    (source installs). Formats as YYYY-MM-DD for display.
     """
     try:
-        result = subprocess.run(
-            ["git", "log", "-1", "--format=%cd", "--date=short", "HEAD"],
-            capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=5,
-            cwd=str(project_root),
-        )
-        if result.returncode == 0:
-            value = result.stdout.strip()
-            if value:
-                return value
+        from hermes_cli.version_info import get_version_info
+
+        info = get_version_info()
+        if info.commit_date:
+            from datetime import datetime, timezone
+
+            return datetime.fromtimestamp(info.commit_date, tz=timezone.utc).strftime("%Y-%m-%d")
     except Exception:
         pass
-
     return ""
 
 

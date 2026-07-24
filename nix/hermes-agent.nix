@@ -36,6 +36,7 @@
   revCount ? null,
   branch ? null,
   dirty ? false,
+  lastModified ? null,
   # Overridable parameters
   extraPythonPackages ? [ ],
   extraDependencyGroups ? [ ],
@@ -202,7 +203,7 @@ stdenv.mkDerivation (finalAttrs: {
     # runtime instead of probing env vars or .git — one file, one source
     # of truth for the Python runtime (CLI, TUI).
     cat > $out/share/hermes-agent/.hermes_build_info.json <<STAMP
-    {"schemaVersion":2,"commit":${builtins.toJSON rev},"branch":${builtins.toJSON stampBranch},"baseVersion":"${version}","displayVersion":"${stampDisplayVersion}","distance":${builtins.toJSON stampDistance},"dirty":${if dirty then "true" else "false"},"source":"nix"}
+    {"schemaVersion":2,"commit":${builtins.toJSON rev},"commitDate":${builtins.toJSON lastModified},"branch":${builtins.toJSON stampBranch},"baseVersion":"${version}","displayVersion":"${stampDisplayVersion}","distance":${builtins.toJSON stampDistance},"dirty":${if dirty then "true" else "false"},"source":"nix"}
     STAMP
 
     ${lib.concatMapStringsSep "\n"
