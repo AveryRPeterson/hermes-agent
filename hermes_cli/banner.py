@@ -277,9 +277,9 @@ def _check_via_local_git(repo_dir: Path) -> Optional[int]:
 def check_for_updates() -> Optional[int]:
     """Check whether a Hermes update is available.
 
-    Two paths: if ``HERMES_REVISION`` is set (nix builds embed it), compare
-    it to upstream main via ``git ls-remote``. Otherwise look for a local
-    git checkout and count commits behind ``origin/main``.
+    Two paths: if the install stamp provides a commit (packaged builds),
+    compare it to upstream main via ``git ls-remote``. Otherwise look for a
+    local git checkout and count commits behind ``origin/main``.
 
     Returns the number of commits behind, ``UPDATE_AVAILABLE_NO_COUNT`` (-1)
     if behind but the count is unknown, ``0`` if up-to-date, or ``None`` if
@@ -287,15 +287,27 @@ def check_for_updates() -> Optional[int]:
     """
     hermes_home = get_hermes_home()
     cache_file = hermes_home / ".update_check"
-    embedded_rev = os.environ.get("HERMES_REVISION") or None
+
+    # Only immutable packaged-build provenance should use the remote SHA
+    # comparison. Source installs resolve as ``git`` too, but retain a local
+    # checkout and can calculate the exact behind count below.
+    try:
+        from hermes_cli.version_info import get_version_info
+
+        version_info = get_version_info()
+        embedded_rev = (
+            version_info.commit
+            if version_info.source in {"nix", "docker", "build"}
+            else None
+        )
+    except Exception:
+        embedded_rev = None
 
     # Docker images have no working tree to count commits against — the
-    # published image excludes `.git` (see .dockerignore) and sets no
-    # HERMES_REVISION (that's nix-only). Returning None makes both the Rich
-    # banner (build_welcome_banner) and the Ink badge (branding.tsx, guarded
-    # on `typeof === 'number' && > 0`) show nothing. The dashboard's REST
-    # `/api/hermes/update/check` endpoint short-circuits docker the same way
-    # (web_server.py); mirror that here so the banner/TUI surfaces agree.
+    # published image excludes `.git` (see .dockerignore). Returning None
+    # makes both the Rich banner and the Ink badge show nothing.
+    # The dashboard's REST `/api/hermes/update/check` endpoint short-circuits
+    # docker the same way (web_server.py); mirror that here so surfaces agree.
     try:
         from hermes_cli.config import detect_install_method, get_project_root
         if detect_install_method(get_project_root()) == "docker":
@@ -324,13 +336,8 @@ def check_for_updates() -> Optional[int]:
         # Prefer the running code's location over the profile-scoped path.
         # $HERMES_HOME/hermes-agent/ may be a stale copy from --clone-all;
         # Path(__file__) always resolves to the actual installed checkout.
-        repo_dir = Path(__file__).parent.parent.resolve()
-        if not (repo_dir / ".git").exists():
-            repo_dir = hermes_home / "hermes-agent"
-        if not (repo_dir / ".git").exists():
-            # No git checkout and no embedded revision — can't determine
-            # update status. This is the Docker path (already short-circuited
-            # above) or an unsupported install without a source tree.
+        repo_dir = _resolve_repo_dir()
+        if repo_dir is None:
             behind = None
         else:
             behind = _check_via_local_git(repo_dir)

@@ -2,10 +2,19 @@
 
 ``__version__`` remains the package/API version. This module adds a display
 suffix only when it can prove the number of commits since that release.
+
+Resolution order:
+1. Install stamp (``.hermes_build_info.json``) — written at build time by
+   ``scripts/write_install_stamp.py`` for Docker/Nix, or by
+   ``write-build-stamp.mjs`` for the desktop app. The stamp is authoritative
+   for packaged builds.
+2. Live git — for source/dev installs with a ``.git`` directory.
+3. Unknown — no stamp and no git, can't determine provenance.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 from dataclasses import dataclass
@@ -22,7 +31,7 @@ class VersionInfo:
     distance: int | None
     commit: str | None
     branch: str | None
-    source: Literal["git", "nix", "build", "unknown"]
+    source: Literal["git", "nix", "docker", "build", "unknown"]
     dirty: bool = False
 
 
@@ -75,26 +84,71 @@ def _parse_nonnegative(value: str | None) -> int | None:
     return parsed if parsed >= 0 else None
 
 
-def _nix_version_info() -> VersionInfo | None:
-    commit = os.environ.get("HERMES_REVISION") or None
-    current_count = _parse_nonnegative(os.environ.get("HERMES_REVISION_COUNT"))
-    release_count = _parse_nonnegative(os.environ.get("HERMES_RELEASE_REV_COUNT"))
-    if not commit:
+# --- Install stamp reader ---------------------------------------------------
+
+# The stamp file lives alongside the code in source installs (Docker writes
+# it to the project root) or at a path the Nix wrapper sets via env var
+# (the derivation output and the venv are separate store paths).
+def _resolve_stamp_file() -> Path | None:
+    override = os.environ.get("HERMES_BUILD_INFO")
+    if override:
+        p = Path(override)
+        return p if p.is_file() else None
+    # Source/Docker: next to the code root.
+    p = Path(__file__).parent.parent / ".hermes_build_info.json"
+    return p if p.is_file() else None
+
+
+def _stamp_version_info() -> VersionInfo | None:
+    """Read provenance from a build-time install stamp."""
+    stamp_file = _resolve_stamp_file()
+    if stamp_file is None:
         return None
-    distance = (
-        max(0, current_count - release_count)
-        if current_count is not None and release_count is not None
-        else None
-    )
+    try:
+        raw = stamp_file.read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (OSError, json.JSONDecodeError):
+        return None
+
+    if not isinstance(data, dict) or "commit" not in data:
+        return None
+
+    commit = data.get("commit") or None
+    if not commit or set(commit) == {"0"}:
+        # All-zero placeholder = fallback stamp, not real provenance.
+        return None
+
+    base_version = data.get("baseVersion") or __version__
+    display_version = data.get("displayVersion") or base_version
+    distance = data.get("distance")
+    if isinstance(distance, str):
+        distance = _parse_nonnegative(distance)
+
+    # Normalize source labels — the stamp's "source" field describes the
+    # build environment (ci/local/docker/nix/fallback), not the runtime
+    # provenance path. Map known packaged sources to their runtime label.
+    stamp_source = str(data.get("source") or "")
+    if stamp_source in ("docker", "nix"):
+        source: Literal["git", "nix", "docker", "build", "unknown"] = stamp_source
+    elif stamp_source in ("ci", "local"):
+        # CI/local stamps are still git-based provenance — the commit was
+        # resolved from git at build time and baked into the stamp.
+        source = "git"
+    else:
+        source = "build"
+
     return VersionInfo(
-        __version__,
-        _derived_version(__version__, distance, os.environ.get("HERMES_REVISION_DIRTY") == "1"),
-        distance,
+        base_version,
+        display_version,
+        distance if isinstance(distance, int) else None,
         commit,
-        os.environ.get("HERMES_REVISION_BRANCH") or None,
-        "nix",
-        os.environ.get("HERMES_REVISION_DIRTY") == "1",
+        data.get("branch") or None,
+        source,
+        bool(data.get("dirty")),
     )
+
+
+# --- Git provenance (source/dev installs) -----------------------------------
 
 
 def _git_version_info(repo_dir: Path) -> VersionInfo:
@@ -129,6 +183,8 @@ def _git_version_info(repo_dir: Path) -> VersionInfo:
     )
 
 
+# --- Cache + public API -----------------------------------------------------
+
 _cached_version_info: VersionInfo | None = None
 
 
@@ -139,24 +195,23 @@ def _reset_version_info_cache() -> None:
 
 
 def get_version_info() -> VersionInfo:
-    """Return cached provenance from Nix metadata, git, or a baked SHA."""
+    """Return cached provenance from install stamp, git, or unknown."""
     global _cached_version_info
     if _cached_version_info is not None:
         return _cached_version_info
 
-    info = _nix_version_info()
+    # 1. Install stamp (packaged builds: Docker, Nix)
+    info = _stamp_version_info()
+
+    # 2. Live git (source/dev installs)
     if info is None:
         repo_dir = _resolve_repo_dir()
         if repo_dir is not None:
             info = _git_version_info(repo_dir)
-        else:
-            try:
-                from hermes_cli.build_info import get_build_sha
 
-                commit = get_build_sha(short=0)
-            except Exception:
-                commit = None
-            info = VersionInfo(__version__, __version__, None, commit, None, "build" if commit else "unknown")
+    # 3. Unknown — no stamp, no git
+    if info is None:
+        info = VersionInfo(__version__, __version__, None, None, None, "unknown")
 
     _cached_version_info = info
     return info

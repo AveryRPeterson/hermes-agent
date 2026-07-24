@@ -41,10 +41,20 @@
   extraDependencyGroups ? [ ],
 }:
 let
+  version = (fromTOML (builtins.readFile ../pyproject.toml)).project.version;
   versionModule = builtins.readFile ../hermes_cli/__init__.py;
   releaseRevCountLine = lib.findFirst (line: lib.hasPrefix "__release_rev_count__" line) null (lib.splitString "\n" versionModule);
   releaseRevCountMatch = if releaseRevCountLine == null then null else builtins.match ".*= ([0-9]+)" releaseRevCountLine;
   releaseRevCount = if releaseRevCountMatch == null then null else builtins.fromJSON (builtins.elemAt releaseRevCountMatch 0);
+
+  # Install stamp values — written to .hermes_build_info.json so the Python
+  # runtime (CLI, TUI) reads one file instead of env vars or .git probes.
+  stampDistance = if revCount != null && releaseRevCount != null then lib.trivial.max 0 (revCount - releaseRevCount) else null;
+  stampDisplayVersion =
+    if stampDistance != null && stampDistance > 0 then "${version}+${toString stampDistance}"
+    else if dirty && stampDistance == null then "${version}+?"
+    else version;
+  stampBranch = if branch != null then branch else "unknown";
   mkHermesVenv =
     extraDependencyGroups:
     callPackage ./python.nix {
@@ -167,7 +177,7 @@ let
 in
 stdenv.mkDerivation (finalAttrs: {
   pname = "hermes-agent";
-  version = (fromTOML (builtins.readFile ../pyproject.toml)).project.version;
+  inherit version;
 
   dontUnpack = true;
   dontBuild = true;
@@ -188,6 +198,13 @@ stdenv.mkDerivation (finalAttrs: {
     ln -s ${hermesWeb} $out/share/hermes-agent/web_dist
     ln -s ${hermesTui}/lib/hermes-tui $out/ui-tui
 
+    # Write the canonical install stamp. version_info.py reads this at
+    # runtime instead of probing env vars or .git — one file, one source
+    # of truth for the Python runtime (CLI, TUI).
+    cat > $out/share/hermes-agent/.hermes_build_info.json <<STAMP
+    {"schemaVersion":2,"commit":${builtins.toJSON rev},"branch":${builtins.toJSON stampBranch},"baseVersion":"${version}","displayVersion":"${stampDisplayVersion}","distance":${builtins.toJSON stampDistance},"dirty":${if dirty then "true" else "false"},"source":"nix"}
+    STAMP
+
     ${lib.concatMapStringsSep "\n"
       (name: ''
         makeWrapper ${hermesVenv}/bin/${name} $out/bin/${name} \
@@ -200,28 +217,9 @@ stdenv.mkDerivation (finalAttrs: {
           --set HERMES_WEB_DIST $out/share/hermes-agent/web_dist \
           --set HERMES_TUI_DIR $out/ui-tui \
           --set HERMES_PYTHON ${hermesVenv}/bin/python3 \
-          --set HERMES_NODE ${lib.getExe hermesNpmLib.nodejs}${
-            # Fold the line continuation INTO the optionalString: a bare
-            # `\` on the line above an empty expansion would dangle onto a
-            # blank line, ending the makeWrapper command early and running
-            # the next flag as its own shell command (`--suffix: command
-            # not found`). Only reproduces when rev == null (dirty trees).
-            lib.optionalString (rev != null) " \\
-          --set HERMES_REVISION ${rev}" +
-            lib.optionalString (revCount != null && releaseRevCount != null) " \\
-          --set HERMES_REVISION_COUNT ${toString revCount} \\
-          --set HERMES_RELEASE_REV_COUNT ${toString releaseRevCount}" +
-            # Always set the branch: on a dirty tree flakes can't determine
-            # sourceInfo.ref, so fall back to "unknown" rather than letting
-            # the runtime pick up its self-update default ("main").
-            " \\
-          --set HERMES_REVISION_BRANCH ${if branch != null then branch else "unknown"}" +
-            lib.optionalString dirty " \\\n          --set HERMES_REVISION_DIRTY 1"
-          }${
-            lib.optionalString (
-              extraPythonPackages != [ ]
-            ) " \\\n          --suffix PYTHONPATH : \"${pythonPath}\""
-          }
+          --set HERMES_NODE ${lib.getExe hermesNpmLib.nodejs} \
+          --set HERMES_BUILD_INFO $out/share/hermes-agent/.hermes_build_info.json${lib.optionalString (extraPythonPackages != [ ]) " \\
+          --suffix PYTHONPATH : \"${pythonPath}\""}
       '')
       [
         "hermes"

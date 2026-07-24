@@ -1,9 +1,11 @@
+import json
 from unittest.mock import MagicMock, patch
 
 from hermes_cli.version_info import (
     VersionInfo,
     _derived_version,
     _reset_version_info_cache,
+    _stamp_version_info,
     format_display_version,
     get_version_info,
 )
@@ -25,32 +27,74 @@ def test_derived_version_shows_plus_question_for_dirty_unknown_distance():
     assert _derived_version("0.19.0", 0, dirty=True) == "0.19.0"
 
 
-def test_get_version_info_uses_nix_revision_metadata(monkeypatch):
-    monkeypatch.setenv("HERMES_REVISION", "a" * 40)
-    monkeypatch.setenv("HERMES_REVISION_COUNT", "123")
-    monkeypatch.setenv("HERMES_RELEASE_REV_COUNT", "120")
-    monkeypatch.setenv("HERMES_REVISION_BRANCH", "feature/version")
+def test_stamp_version_info_reads_nix_stamp(tmp_path, monkeypatch):
+    stamp = {
+        "schemaVersion": 2,
+        "commit": "a" * 40,
+        "branch": "feature/version",
+        "baseVersion": "0.19.0",
+        "displayVersion": "0.19.0+3",
+        "distance": 3,
+        "dirty": False,
+        "source": "nix",
+    }
+    stamp_file = tmp_path / ".hermes_build_info.json"
+    stamp_file.write_text(json.dumps(stamp))
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: stamp_file)
 
     info = get_version_info()
 
     assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "a" * 40, "feature/version", "nix")
 
 
-def test_get_version_info_shows_plus_question_for_dirty_nix_without_counts(monkeypatch):
-    monkeypatch.setenv("HERMES_REVISION", "a" * 40)
-    monkeypatch.setenv("HERMES_REVISION_DIRTY", "1")
-    monkeypatch.delenv("HERMES_REVISION_COUNT", raising=False)
-    monkeypatch.delenv("HERMES_RELEASE_REV_COUNT", raising=False)
+def test_stamp_version_info_reads_docker_stamp_with_unknown_distance(tmp_path, monkeypatch):
+    stamp = {
+        "schemaVersion": 2,
+        "commit": "b" * 40,
+        "branch": "unknown",
+        "baseVersion": "0.19.0",
+        "displayVersion": "0.19.0+?",
+        "distance": None,
+        "dirty": True,
+        "source": "docker",
+    }
+    stamp_file = tmp_path / ".hermes_build_info.json"
+    stamp_file.write_text(json.dumps(stamp))
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: stamp_file)
 
     info = get_version_info()
 
-    assert info == VersionInfo("0.19.0", "0.19.0+?", None, "a" * 40, None, "nix", True)
+    assert info == VersionInfo("0.19.0", "0.19.0+?", None, "b" * 40, "unknown", "docker", True)
+
+
+def test_stamp_version_info_ignores_fallback_commit(tmp_path, monkeypatch):
+    """All-zero commit means the stamp couldn't resolve a real SHA — skip it."""
+    stamp = {
+        "schemaVersion": 2,
+        "commit": "0" * 40,
+        "branch": "main",
+        "source": "fallback",
+    }
+    stamp_file = tmp_path / ".hermes_build_info.json"
+    stamp_file.write_text(json.dumps(stamp))
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: stamp_file)
+    monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: None)
+
+    info = get_version_info()
+
+    assert info.source == "unknown"
+    assert info.commit is None
+
+
+def test_stamp_version_info_returns_none_when_file_missing(tmp_path, monkeypatch):
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: None)
+    assert _stamp_version_info() is None
 
 
 def test_get_version_info_counts_commits_after_semver_tag(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
-    monkeypatch.delenv("HERMES_REVISION", raising=False)
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: None)
     monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: repo)
 
     def run(command, **_kwargs):
@@ -71,6 +115,7 @@ def test_get_version_info_counts_commits_after_semver_tag(tmp_path, monkeypatch)
 def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkeypatch):
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: None)
     monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: repo)
 
     calls = []
@@ -96,14 +141,16 @@ def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkey
     assert ("git", "rev-list", "--count", "v2026.7.20..HEAD") in calls
 
 
-def test_get_version_info_keeps_base_version_when_provenance_is_unavailable(monkeypatch):
+def test_get_version_info_unknown_when_no_stamp_and_no_git(monkeypatch):
+    from pathlib import Path
+
+    monkeypatch.setattr("hermes_cli.version_info._resolve_stamp_file", lambda: None)
     monkeypatch.setattr("hermes_cli.version_info._resolve_repo_dir", lambda: None)
-    monkeypatch.setattr("hermes_cli.build_info.get_build_sha", lambda short=0: "deadbeef" if short == 0 else "deadbeef")
 
     info = get_version_info()
 
     assert info.base_version == "0.19.0"
     assert info.derived_version == "0.19.0"
     assert info.distance is None
-    assert info.commit == "deadbeef"
-    assert info.source == "build"
+    assert info.commit is None
+    assert info.source == "unknown"
