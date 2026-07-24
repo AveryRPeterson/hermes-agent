@@ -346,10 +346,17 @@ export interface HermesTerminalExit {
 
 export interface DesktopVersionInfo {
   appVersion: string
+  baseVersion?: string
+  branch?: string
+  commit?: string
+  distance?: number
+  dirty?: boolean
   electronVersion: string
   nodeVersion: string
   platform: string
   hermesRoot: string
+  installMethod?: string
+  source?: 'build' | 'ci' | 'docker' | 'fallback' | 'git' | 'local' | 'nix' | 'unknown'
 }
 
 export type DesktopUninstallMode = 'full' | 'gui' | 'lite'

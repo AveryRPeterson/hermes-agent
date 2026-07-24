@@ -404,7 +404,6 @@ def _read_openai_version_fast() -> str | None:
 def _print_fast_version_info() -> None:
     _startup_fast.print_fast_version_info()
 
-
 def _try_ultrafast_version() -> bool:
     """Handle ``hermes --version`` before config/logging imports."""
     return _startup_fast.try_fast_version()
@@ -4922,10 +4921,18 @@ def cmd_import(args):
 def _print_version_info(*, check_updates: bool = True) -> None:
     from hermes_cli.config import detect_install_method
     from hermes_cli.slash_exec import CommandContext, execute_command
+    from hermes_cli.version_info import get_version_info
 
     # Core version line is registry-owned (shared with the gateway /version);
     # the install/python/SDK detail below is CLI-only decoration.
     print(execute_command("version", CommandContext(surface="cli")).text)
+    version_info = get_version_info()
+    if version_info.branch:
+        print(f"Branch: {version_info.branch}")
+    if version_info.commit:
+        print(f"Commit: {version_info.commit}")
+    if version_info.dirty is not None:
+        print(f"Working tree: {'dirty' if version_info.dirty else 'clean'}")
     print(f"Install directory: {PROJECT_ROOT}")
     print(f"Install method: {detect_install_method(PROJECT_ROOT)}")
 

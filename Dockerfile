@@ -321,7 +321,7 @@ RUN mkdir -p /opt/hermes/bin && \
 # Fix: write the commit SHA passed via the HERMES_GIT_SHA build-arg to
 # /opt/hermes/.hermes_build_sha at build time, and have
 # hermes_cli/build_info.py read it at runtime.  Both `hermes dump` and
-# banner.get_git_banner_state() try the baked SHA first, then fall back
+# version_info.get_version_info() try the baked SHA first, then fall back
 # to live `git rev-parse` for source installs (unchanged behaviour).
 #
 # The arg is optional — local `docker build` without --build-arg simply

@@ -15,9 +15,32 @@
   electron,
   hermesAgent,
   python3,
+  rev ? null,
+  revCount ? null,
+  branch ? null,
+  dirty ? false,
+  releaseRevCount ? null,
   ...
 }:
 let
+  # The Electron manifest identifies the UI project, but Hermes's version is
+  # owned by the root Python package. Keep the Nix derivation and the manifest
+  # shipped to Electron aligned with that one canonical value.
+  version = (fromTOML (builtins.readFile ../pyproject.toml)).project.version;
+  distance =
+    if revCount != null && releaseRevCount != null then
+      lib.trivial.max 0 (revCount - releaseRevCount)
+    else
+      null;
+  displayVersion =
+    if distance != null && distance > 0 then "${version}+${toString distance}"
+    else if dirty && distance == null then "${version}+?"
+    else version;
+  # On a dirty tree, sourceInfo.ref is null (flakes can't determine the ref).
+  # Show "unknown" rather than null so the desktop doesn't fall back to its
+  # self-update default branch ("main") when the real branch is unavailable.
+  branchLabel = if branch != null then branch else "unknown";
+
   electronHeaders = pkgs.fetchurl {
     url = "https://artifacts.electronjs.org/headers/dist/v${electron.version}/node-v${electron.version}-headers.tar.gz";
     sha256 = "sha256-0nUJBQDEikyYntZwq+ycH32mzEQtQmz3ICz9eeTMpJk=";
@@ -56,6 +79,17 @@ let
       runHook preBuild
 
       mkdir -p apps/desktop/build
+
+      # Electron reads app.getVersion() from this manifest. The source
+      # manifest deliberately does not own the Hermes release version, so
+      # stamp the canonical package version into the Nix-built copy.
+      node -e '
+        const fs = require("fs")
+        const file = "apps/desktop/package.json"
+        const pkg = JSON.parse(fs.readFileSync(file, "utf8"))
+        pkg.version = process.argv[1]
+        fs.writeFileSync(file, JSON.stringify(pkg, null, 2) + "\n")
+      ' '${version}'
 
       patchShebangs .
 
@@ -126,7 +160,11 @@ let
       # before the cd.
       cp -rn apps/desktop/dist $out/
 
-      echo '{"schemaVersion":1,"commit":"nix-dummy-commit","branch":"nix","dirty":false,"source":"nix"}' > $out/install-stamp.json
+      cat > $out/install-stamp.json <<'EOF'
+      {"schemaVersion":2,"commit":${builtins.toJSON rev},"branch":${builtins.toJSON branchLabel},"baseVersion":"${version}","displayVersion":"${displayVersion}","distance":${builtins.toJSON distance},"dirty":${
+        if dirty then "true" else "false"
+      },"source":"nix","installMethod":"nix"}
+      EOF
 
       cp -n apps/desktop/package.json $out/
       runHook postInstall
