@@ -45,8 +45,6 @@ export interface VersionStatusInput {
 }
 
 export interface VersionStatusResult {
-  /** Secondary text beside the label — the commit sha, when it adds anything. */
-  detail?: string
   /** An update is waiting: callers tint the row with it. */
   hasUpdate: boolean
   label: string
@@ -94,10 +92,9 @@ export function resolveVersionStatus({
     client && branch && copy.branch(branch)
   ]
     .filter(Boolean)
-    .join(' · ')
+    .join('\n')
 
   return {
-    detail: client && version && sha && !busy && !remote ? sha : undefined,
     hasUpdate: !busy && available,
     label: busy ? `${base} · ${restarting ? copy.restart : copy.update}` : `${base}${hint}`,
     tooltip: tooltip || undefined,
