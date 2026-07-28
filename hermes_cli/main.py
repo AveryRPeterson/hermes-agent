@@ -4919,7 +4919,6 @@ def cmd_import(args):
 
 
 def _print_version_info(*, check_updates: bool = True) -> None:
-    from hermes_cli.config import detect_install_method
     from hermes_cli.slash_exec import CommandContext, execute_command
     from hermes_cli.version_info import get_version_info
 
@@ -4933,8 +4932,10 @@ def _print_version_info(*, check_updates: bool = True) -> None:
         print(f"Commit: {version_info.commit}")
     if version_info.dirty is not None:
         print(f"Working tree: {'dirty' if version_info.dirty else 'clean'}")
+    print(f"Source: {version_info.source}")
+    if version_info.distribution:
+        print(f"Distribution: {version_info.distribution}")
     print(f"Install directory: {PROJECT_ROOT}")
-    print(f"Install method: {detect_install_method(PROJECT_ROOT)}")
 
     # Show Python version
     print(f"Python: {sys.version.split()[0]}")

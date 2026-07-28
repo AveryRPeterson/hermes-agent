@@ -1830,6 +1830,8 @@ export interface Translations {
     versionDetailsBranch: string
     versionDetailsNoBranchInfo: string
     versionDetailsCommit: string
+    versionDetailsSource: string
+    versionDetailsDistribution: string
     versionDetailsDirty: string
     versionDetailsDirtyUnknown: string
     connectionRetry: string

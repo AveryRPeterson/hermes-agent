@@ -28,6 +28,8 @@ let
   # shipped to Electron aligned with that one canonical value.
   
 
+  
+
   version = (fromTOML (builtins.readFile ../pyproject.toml)).project.version;
   distance =
     if revCount != null && releaseRevCount != null then
@@ -161,7 +163,7 @@ let
       cat > $out/install-stamp.json <<'EOF'
       {"schemaVersion":2,"commit":${builtins.toJSON rev},"branch":${builtins.toJSON branch},"baseVersion":"${version}","displayVersion":"${displayVersion}","distance":${builtins.toJSON distance},"dirty":${
         if dirty then "true" else "false"
-      },"source":"nix","installMethod":"nix"}
+      },"source":"nix","distribution":"nix"}
       EOF
 
       cp -n apps/desktop/package.json $out/
