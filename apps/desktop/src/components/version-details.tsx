@@ -25,12 +25,10 @@ export function VersionDetails({ version }: { version: DesktopVersionInfo }) {
           <dd>{version.baseVersion}</dd>
         </div>
       )}
-      {version.branch && (
-        <div className="flex justify-between gap-4">
-          <dt className="text-muted-foreground">{u.versionDetailsBranch}</dt>
-          <dd className="break-all text-right">{version.branch}</dd>
-        </div>
-      )}
+      <div className="flex justify-between gap-4">
+        <dt className="text-muted-foreground">{u.versionDetailsBranch}</dt>
+        <dd className="break-all text-right">{version.branch ?? u.versionDetailsNoBranchInfo}</dd>
+      </div>
       {version.commit && (
         <div className="flex justify-between gap-4">
           <dt className="text-muted-foreground">{u.versionDetailsCommit}</dt>

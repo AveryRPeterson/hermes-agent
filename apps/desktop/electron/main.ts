@@ -11656,7 +11656,7 @@ function resolveHermesVersionInfo() {
       baseVersion: INSTALL_STAMP.baseVersion ?? undefined,
       distance: INSTALL_STAMP.distance ?? undefined,
       commit: INSTALL_STAMP.commit,
-      branch: INSTALL_STAMP.branch ?? undefined,
+      branch: INSTALL_STAMP.branch,
       source: INSTALL_STAMP.source ?? undefined,
       installMethod: INSTALL_STAMP.installMethod ?? undefined,
       dirty: INSTALL_STAMP.dirty

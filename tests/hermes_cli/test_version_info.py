@@ -47,11 +47,11 @@ def test_stamp_version_info_reads_nix_stamp(tmp_path, monkeypatch):
     assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "a" * 40, "feature/version", "nix")
 
 
-def test_stamp_version_info_reads_docker_stamp_with_unknown_distance(tmp_path, monkeypatch):
+def test_stamp_version_info_preserves_missing_branch(tmp_path, monkeypatch):
     stamp = {
         "schemaVersion": 2,
         "commit": "b" * 40,
-        "branch": "unknown",
+        "branch": None,
         "baseVersion": "0.19.0",
         "displayVersion": "0.19.0+?",
         "distance": None,
@@ -64,7 +64,7 @@ def test_stamp_version_info_reads_docker_stamp_with_unknown_distance(tmp_path, m
 
     info = get_version_info()
 
-    assert info == VersionInfo("0.19.0", "0.19.0+?", None, "b" * 40, "unknown", "docker", True)
+    assert info == VersionInfo("0.19.0", "0.19.0+?", None, "b" * 40, None, "docker", True)
 
 
 def test_stamp_version_info_ignores_fallback_commit(tmp_path, monkeypatch):

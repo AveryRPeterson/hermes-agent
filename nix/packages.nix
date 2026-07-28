@@ -14,8 +14,10 @@
       dirtyRevision = inputs.self.dirtyRev or null;
       # inputs.self.sourceInfo is a string (store path) in current Nix, not a
       # record. The metadata fields are available as top-level attributes on
-      # inputs.self directly: rev, dirtyRev, lastModified, ref, revCount.
-      # On dirty trees ref/rev/revCount are null; dirtyRev is set.
+      # inputs.self directly. A flake URL's requested ref is intentionally not
+      # exposed as self.ref after Nix resolves it to an immutable source, so
+      # branch is normally null for remote flakes. Preserve null rather than
+      # inventing a sentinel that could be a real branch name.
       rev = inputs.self.rev or (if dirtyRevision != null then builtins.substring 0 40 dirtyRevision else null);
       revCount = inputs.self.revCount or null;
       rawRef = inputs.self.ref or null;

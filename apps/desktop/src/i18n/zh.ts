@@ -2388,6 +2388,7 @@ export const zh: Translations = {
     versionDetailsVersion: '版本',
     versionDetailsBaseVersion: '发布版本',
     versionDetailsBranch: '分支',
+    versionDetailsNoBranchInfo: '无分支信息',
     versionDetailsCommit: '提交',
     versionDetailsDirty: '此软件包从有未提交更改的源代码树构建。',
     versionDetailsDirtyUnknown: '从有未提交更改的源代码树构建。自上次发布以来的更改数量未知。',

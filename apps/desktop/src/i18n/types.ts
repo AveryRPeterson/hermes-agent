@@ -1828,6 +1828,7 @@ export interface Translations {
     versionDetailsVersion: string
     versionDetailsBaseVersion: string
     versionDetailsBranch: string
+    versionDetailsNoBranchInfo: string
     versionDetailsCommit: string
     versionDetailsDirty: string
     versionDetailsDirtyUnknown: string

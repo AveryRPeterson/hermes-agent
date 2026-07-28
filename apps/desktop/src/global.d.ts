@@ -347,7 +347,7 @@ export interface HermesTerminalExit {
 export interface DesktopVersionInfo {
   appVersion: string
   baseVersion?: string
-  branch?: string
+  branch?: string | null
   commit?: string
   distance?: number
   dirty?: boolean

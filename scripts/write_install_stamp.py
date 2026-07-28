@@ -153,8 +153,6 @@ def build_stamp(
         branch = _resolve_branch_from_env()
     if branch is None:
         branch = _resolve_branch_from_git()
-    if branch is None:
-        branch = "unknown"
 
     # Dirty: explicit > git
     if dirty is None:

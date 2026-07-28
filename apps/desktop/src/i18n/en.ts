@@ -2197,6 +2197,7 @@ export const en: Translations = {
     versionDetailsVersion: 'Version',
     versionDetailsBaseVersion: 'Release version',
     versionDetailsBranch: 'Branch',
+    versionDetailsNoBranchInfo: 'No branch information',
     versionDetailsCommit: 'Commit',
     versionDetailsDirty: 'This package was built from a dirty source tree.',
     versionDetailsDirtyUnknown: 'Built from a dirty source tree. The number of changes since the last release is unknown.',
