@@ -1,0 +1,208 @@
+name: Desktop Bundled Release
+
+# Builds the fully self-contained desktop installers (agent payloads baked
+# in: repo snapshot at the release tag, uv + CPython, wheelhouse, node,
+# prebuilt TUI/dashboard JS) for every (os, arch) target, per the design in
+# .hermes/plans/2026-08-05_desktop-bundled-payloads-channels-eject.md.
+#
+# The entire bundled-install stack (install manifest, --payload-dir stages,
+# desktop adoption/re-materialization) is dormant unless a build sets
+# HERMES_DESKTOP_BUNDLED=1 — this workflow is the only place that does.
+#
+# Triggers:
+#   * push of a final release tag (vX.Y.Z) — the normal release path.
+#   * workflow_dispatch with an explicit tag — re-runs / dry runs, with
+#     opt-in release upload.
+#
+# Wheels/uv/python/node are all fetched NATIVELY on each runner (that's why
+# this is a matrix — electron-builder needs per-OS runners for signing
+# anyway), so there are no cross-platform wheel-tag tables anywhere.
+#
+# Signing/notarization: notarize.mjs and electron-builder skip gracefully
+# when APPLE_*/CSC_* secrets are absent, so this workflow produces unsigned
+# artifacts on forks and signed ones once org secrets are provisioned.
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to bundle (vX.Y.Z). Must exist on the repo.'
+        required: true
+        type: string
+      upload_release:
+        description: 'Attach artifacts to the GitHub release for the tag'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write # release asset upload; read-only for everything else
+
+concurrency:
+  group: desktop-bundled-release-${{ github.event.inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: linux-x64
+            runner: ubuntu-24.04
+            builder_args: --linux AppImage
+          - label: linux-arm64
+            runner: ubuntu-24.04-arm
+            builder_args: --linux AppImage
+          - label: darwin-arm64
+            runner: macos-15
+            builder_args: --mac dmg zip
+          - label: darwin-x64
+            runner: macos-15-intel
+            builder_args: --mac dmg zip
+          - label: win32-x64
+            runner: windows-2025
+            builder_args: --win nsis
+    env:
+      # The one switch that wakes the whole bundled stack up.
+      HERMES_DESKTOP_BUNDLED: '1'
+      HERMES_PAYLOAD_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      HERMES_PAYLOAD_PYTHON: '3.11'
+    steps:
+      - name: Validate tag shape
+        shell: bash
+        run: |
+          case "$HERMES_PAYLOAD_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*) echo "tag: $HERMES_PAYLOAD_TAG" ;;
+            *) echo "::error::'$HERMES_PAYLOAD_TAG' is not a final release tag (vX.Y.Z)"; exit 1 ;;
+          esac
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.HERMES_PAYLOAD_TAG }}
+          # stage-agent-payloads clones the payload repo from this checkout at
+          # the tag; depth-1 at the tag is all it needs, but the tag ref must
+          # exist locally.
+          fetch-tags: true
+
+      # ── Node ──────────────────────────────────────────────────────────
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+
+      - name: grab npm 12
+        shell: bash
+        run: npm i -g npm@12
+
+      - uses: ./.github/actions/retry
+        with:
+          command: npm ci
+
+      # ── uv + Python (native to this runner) ───────────────────────────
+      - name: Install uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: '0.9.28'
+          enable-cache: true
+          cache-dependency-glob: |
+            pyproject.toml
+            uv.lock
+
+      # ── Prebuild the JS surfaces that ride in the payload ─────────────
+      # ui-tui (incl. hermes-ink) + the dashboard SPA. Built here, tarred by
+      # stage-agent-payloads; first launch on the user machine never runs npm.
+      - name: Build TUI
+        uses: ./.github/actions/retry
+        with:
+          command: npm run build --prefix ui-tui
+
+      - name: Build dashboard SPA
+        uses: ./.github/actions/retry
+        with:
+          command: npm run build --prefix web
+
+      # ── Node dist for the payload (runtime the AGENT uses, not the CI node)
+      - name: Stage node dist for payload
+        shell: bash
+        run: |
+          # The payload ships the same major install.sh pins for users
+          # (NODE_VERSION=22), not the workflow's node 26.
+          NODE_MAJOR=22
+          VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | node -e '
+            let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
+              const v=JSON.parse(d).find(e=>e.version.startsWith("v'"$NODE_MAJOR"'."));
+              if(!v)process.exit(1);console.log(v.version)})')
+          case "${{ matrix.label }}" in
+            linux-x64)    DIST="node-$VERSION-linux-x64.tar.xz" ;;
+            linux-arm64)  DIST="node-$VERSION-linux-arm64.tar.xz" ;;
+            darwin-x64)   DIST="node-$VERSION-darwin-x64.tar.gz" ;;
+            darwin-arm64) DIST="node-$VERSION-darwin-arm64.tar.gz" ;;
+            win32-x64)    DIST="node-$VERSION-win-x64.zip" ;;
+          esac
+          mkdir -p /tmp/node-payload /tmp/node-extract
+          curl -fsSL "https://nodejs.org/dist/$VERSION/$DIST" -o "/tmp/$DIST"
+          # bsdtar (Windows tar.exe) reads .zip too, so one extraction path
+          # covers all three archive shapes: unpack, then hoist the single
+          # top-level node-vX.Y.Z-* directory's contents.
+          tar -xf "/tmp/$DIST" -C /tmp/node-extract
+          mv /tmp/node-extract/*/* /tmp/node-payload/
+          test -x /tmp/node-payload/bin/node || test -x /tmp/node-payload/node.exe
+          echo "HERMES_PAYLOAD_NODE_DIST=/tmp/node-payload" >> "$GITHUB_ENV"
+
+      # ── Build + package the desktop app with payloads ──────────────────
+      # npm run build runs write-build-stamp (hard-fails if
+      # HERMES_DESKTOP_BUNDLED=1 without HERMES_PAYLOAD_TAG) and
+      # stage-agent-payloads (repo clone at the tag, uv+python, wheelhouse
+      # via `uvx pip wheel --only-binary=:all:`, node dist, js tarball).
+      - name: Build and package
+        working-directory: apps/desktop
+        shell: bash
+        env:
+          # macOS signing/notarization — absent on forks; notarize.mjs and
+          # electron-builder both skip gracefully.
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+        run: |
+          npm run build
+          npm run builder -- ${{ matrix.builder_args }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: hermes-bundled-${{ matrix.label }}-${{ env.HERMES_PAYLOAD_TAG }}
+          path: |
+            apps/desktop/release/*.dmg
+            apps/desktop/release/*.zip
+            apps/desktop/release/*.exe
+            apps/desktop/release/*.AppImage
+            apps/desktop/release/*.blockmap
+            apps/desktop/release/latest*.yml
+          retention-days: 30
+          if-no-files-found: error
+
+      # ── Attach to the GitHub release (tag pushes + opt-in dispatch) ────
+      - name: Upload to GitHub release
+        if: github.event_name == 'push' || github.event.inputs.upload_release == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          files=(apps/desktop/release/*.dmg apps/desktop/release/*.zip \
+                 apps/desktop/release/*.exe apps/desktop/release/*.AppImage \
+                 apps/desktop/release/*.blockmap apps/desktop/release/latest*.yml)
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::no release artifacts found"; exit 1
+          fi
+          gh release create "$HERMES_PAYLOAD_TAG" --verify-tag --draft --title "$HERMES_PAYLOAD_TAG" 2>/dev/null || true
+          gh release upload "$HERMES_PAYLOAD_TAG" "${files[@]}" --clobber
