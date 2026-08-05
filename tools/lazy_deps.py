@@ -271,13 +271,6 @@ def extra_specs(extra: str, _seen: Optional[frozenset] = None) -> tuple[str, ...
     return tuple(out)
 
 
-def feature_extra(feature: str) -> str:
-    """Return the pyproject extra backing ``feature``, or raise KeyError."""
-    if feature not in LAZY_DEPS:
-        raise KeyError(f"Unknown lazy feature: {feature!r}")
-    return LAZY_DEPS[feature]
-
-
 class FeatureUnavailable(RuntimeError):
     """A lazily-installable feature is missing and cannot be made available.
 
@@ -456,6 +449,11 @@ def activate_durable_lazy_target() -> None:
         logger.debug("Failed to activate durable lazy target %s: %s", target, e)
 
 
+# One wording for the config kill switch. ensure() and install_specs both
+# report it, and two spellings of the same cause read like two causes.
+_CONFIG_DISABLED_REASON = "lazy installs disabled (security.allow_lazy_installs=false)"
+
+
 def _managed_install_reason(feature: str, extra: Optional[str] = None) -> str:
     """Return the message for an install that this deployment cannot run.
 
@@ -505,9 +503,7 @@ def _managed_install_reason(feature: str, extra: Optional[str] = None) -> str:
             "update removes the change."
         )
 
-    return (
-        "lazy installs disabled (security.allow_lazy_installs=false)"
-    )
+    return _CONFIG_DISABLED_REASON
 
 
 def _managed_system() -> str:
@@ -521,17 +517,7 @@ def _managed_system() -> str:
 
 
 def _sealed_venv_reason() -> Optional[str]:
-    """Return the reason that this deployment refuses installs, or None.
-
-    The Docker image sets ``HERMES_DISABLE_LAZY_INSTALLS=1``. The image
-    contains each extra that works in a container. An install here means
-    that the image does not have a dependency that it must ship. This is a
-    fault in the image build.
-
-    The message must name that cause, and must not name
-    ``security.allow_lazy_installs``. The user did not set that key, and it
-    is not why the install stopped.
-    """
+    """Return why a sealed deployment refuses an install, or None."""
     if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") != "1":
         return None
     return _managed_install_reason("", None)
@@ -666,6 +652,25 @@ def _is_present(spec: str) -> bool:
         return False
 
 
+def _write_temp_requirements(lines, prefix: str) -> Optional[Path]:
+    """Write ``lines`` to a temporary requirements file and return its path.
+
+    Returns None for an empty list, and None when the write fails. Each
+    caller treats None as "run the install without this file".
+    """
+    lines = list(lines)
+    if not lines:
+        return None
+    try:
+        fd, path = tempfile.mkstemp(prefix=prefix, suffix=".txt")
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        return Path(path)
+    except Exception as e:
+        logger.debug("Could not write %s file: %s", prefix, e)
+        return None
+
+
 def _core_constraints_file() -> Optional[Path]:
     """Write a pip constraints file pinning every package already importable
     in the core environment to its installed version.
@@ -690,7 +695,6 @@ def _core_constraints_file() -> Optional[Path]:
     except ImportError:
         return None
     try:
-        import tempfile
         lines = []
         seen = set()
         for dist in distributions():
@@ -703,12 +707,7 @@ def _core_constraints_file() -> Optional[Path]:
                 continue
             seen.add(key)
             lines.append(f"{name}=={ver}")
-        if not lines:
-            return None
-        fd, path = tempfile.mkstemp(prefix="hermes-core-constraints-", suffix=".txt")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(sorted(lines)) + "\n")
-        return Path(path)
+        return _write_temp_requirements(sorted(lines), "hermes-core-constraints-")
     except Exception as e:
         logger.debug("Could not build core constraints file: %s", e)
         return None
@@ -753,17 +752,9 @@ def _security_overrides_file() -> Optional[Path]:
     then installs without the overrides, and the downgrade that these
     prevent becomes possible again.
     """
-    overrides = _security_overrides()
-    if not overrides:
-        return None
-    try:
-        fd, path = tempfile.mkstemp(prefix="hermes-lazy-overrides-", suffix=".txt")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(overrides) + "\n")
-        return Path(path)
-    except Exception as e:
-        logger.debug("Could not build security overrides file: %s", e)
-        return None
+    return _write_temp_requirements(
+        _security_overrides(), "hermes-lazy-overrides-"
+    )
 
 
 def _pip_reassert_overrides(
@@ -837,11 +828,8 @@ def _uv_sync_extra(feature: str) -> Optional[_InstallResult]:
     root = _project_root()
     if root is None or not (root / "uv.lock").is_file():
         return None
-    try:
-        extra = feature_extra(feature)
-    except KeyError:
-        return None
-    if extra not in _optional_dependencies():
+    extra = LAZY_DEPS.get(feature)
+    if extra is None or extra not in _optional_dependencies():
         return None
 
     try:
@@ -1044,7 +1032,7 @@ def feature_specs(feature: str) -> tuple[str, ...]:
     a stripped install with no pyproject) — failing loudly beats installing
     nothing and reporting success.
     """
-    extra = feature_extra(feature)
+    extra = LAZY_DEPS[feature]
     specs = extra_specs(extra)
     if not specs:
         raise FeatureUnavailable(
@@ -1124,10 +1112,7 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
         raise FeatureUnavailable(feature, missing, sealed, actionable=False)
 
     if not _allow_lazy_installs():
-        raise FeatureUnavailable(
-            feature, missing,
-            "lazy installs disabled (security.allow_lazy_installs=false)",
-        )
+        raise FeatureUnavailable(feature, missing, _CONFIG_DISABLED_REASON)
 
     # Only show the interactive confirmation when we own a TTY and
     # prompt_toolkit isn't running.  A bare input() deadlocks when a
@@ -1272,9 +1257,7 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
         return InstallSpecsResult(ok=True, command="")
 
     if not _allow_lazy_installs():
-        reason = _sealed_venv_reason() or (
-            "runtime installs disabled (security.allow_lazy_installs=false)"
-        )
+        reason = _sealed_venv_reason() or _CONFIG_DISABLED_REASON
         return InstallSpecsResult(ok=False, blocked=True, reason=reason)
 
     target = _lazy_install_target()

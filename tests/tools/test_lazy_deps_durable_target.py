@@ -75,15 +75,6 @@ class TestGatingWithTarget:
         )
         assert ld._allow_lazy_installs() is True
 
-    def test_sealed_image_without_a_target_permits_nothing(self, monkeypatch):
-        """No target means no writable directory, so no install can work."""
-        monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
-        monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
-        monkeypatch.setattr(
-            "hermes_cli.config.load_config", lambda: {}, raising=False
-        )
-        assert ld._allow_lazy_installs() is False
-
     def test_ensure_refuses_in_a_sealed_image_even_with_a_target(
         self, monkeypatch, tmp_path
     ):

@@ -17,6 +17,8 @@ There is no test that two lists agree, because there is one list.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from tools import lazy_deps as ld
