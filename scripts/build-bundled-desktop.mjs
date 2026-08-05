@@ -81,13 +81,16 @@ console.log(`[build-bundled] tag=${tag} platform=${process.platform}-${process.a
 
 // ── 2-3. deps + JS surfaces ─────────────────────────────────────────────────
 
+// ui-tui, ui-tui/packages/*, and web are npm workspaces of the repo root:
+// ONE root `npm ci` installs all of them, hoisted into the root
+// node_modules. Never run npm ci inside a workspace directory — that
+// builds a partial shadow tree beside the hoisted one and breaks module
+// resolution for the workspace builds below.
 if (!skipInstall) {
   run("npm", ["ci", "--no-audit", "--no-fund"])
-  run("npm", ["ci", "--no-audit", "--no-fund"], { cwd: path.join(REPO_ROOT, "ui-tui") })
-  run("npm", ["ci", "--no-audit", "--no-fund"], { cwd: path.join(REPO_ROOT, "web") })
 }
-run("npm", ["run", "build"], { cwd: path.join(REPO_ROOT, "ui-tui") })
-run("npm", ["run", "build"], { cwd: path.join(REPO_ROOT, "web") })
+run("npm", ["run", "build", "--workspace", "ui-tui"])
+run("npm", ["run", "build", "--workspace", "web"])
 
 // ── 4. payload node dist ────────────────────────────────────────────────────
 
