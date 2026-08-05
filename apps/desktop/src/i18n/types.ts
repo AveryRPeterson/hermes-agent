@@ -1843,6 +1843,7 @@ export interface Translations {
     availableTitleBackend: string
     availableBodyBackend: string
     availableBodyNoChangelog: string
+    availableBodyRelease: (tag: string) => string
     updateNow: string
     maybeLater: string
     moreChanges: (count: number) => string

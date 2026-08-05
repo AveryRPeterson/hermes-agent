@@ -1983,6 +1983,7 @@ export const zhHant = defineLocale({
     availableTitleBackend: '後端有可用更新',
     availableBodyBackend: '已連接的 Hermes 後端有新版本可安裝。',
     availableBodyNoChangelog: '已有新版本可用。此安裝方式無法顯示更新日誌。',
+    availableBodyRelease: tag => `Hermes ${tag} 已就緒。應用程式與智慧代理將一同更新。`,
     updateNow: '立即更新',
     maybeLater: '稍後再說',
     moreChanges: count => `另有 ${count} 項變更。`,
