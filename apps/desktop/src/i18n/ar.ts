@@ -1856,7 +1856,7 @@ export const ar = defineLocale({
     availableTitleBackend: 'يتوفر تحديث للواجهة الخلفية',
     availableBodyBackend: 'إصدار أحدث من واجهة Hermes الخلفية المتصلة جاهز للتثبيت.',
     availableBodyNoChangelog: 'إصدار أحدث جاهز. ملاحظات الإصدار غير متاحة لنوع التثبيت هذا.',
-    availableBodyRelease: tag => `Hermes ${tag} جاهز للتثبيت. يتم تحديث التطبيق والوكيل معًا.`,
+    availableBodyRelease: tag => `Hermes ${tag} جاهز للتثبيت.`,
     updateNow: 'التحديث الآن',
     maybeLater: 'ربما لاحقا',
     moreChanges: count => `+ ${count} تغيير${count === 1 ? '' : 'ات'} إضافي مُضمَّن.`,

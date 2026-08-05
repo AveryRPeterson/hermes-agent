@@ -2403,7 +2403,7 @@ export const zh: Translations = {
     availableTitleBackend: '后端有可用更新',
     availableBodyBackend: '已连接的 Hermes 后端有新版本可安装。',
     availableBodyNoChangelog: '已有新版本可用。此安装方式无法显示更新日志。',
-    availableBodyRelease: tag => `Hermes ${tag} 已就绪。应用与智能体将一同更新。`,
+    availableBodyRelease: tag => `Hermes ${tag} 已就绪。`,
     updateNow: '立即更新',
     maybeLater: '稍后再说',
     moreChanges: count => `另有 ${count} 项更改。`,

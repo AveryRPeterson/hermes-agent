@@ -2045,7 +2045,7 @@ export const ja = defineLocale({
     availableBodyBackend: '接続中の Hermes バックエンドの新しいバージョンをインストールできます。',
     availableBodyNoChangelog:
       '新しいバージョンを利用できます。このインストール形式ではリリースノートは表示できません。',
-    availableBodyRelease: tag => `Hermes ${tag} をインストールできます。アプリとエージェントは一緒に更新されます。`,
+    availableBodyRelease: tag => `Hermes ${tag} をインストールできます。`,
     updateNow: '今すぐ更新',
     maybeLater: '後で',
     moreChanges: count => `さらに ${count} 件の変更が含まれています。`,

@@ -8,7 +8,7 @@ const copy = {
   availableTitleBackend: 'Backend update available',
   availableBodyBackend: 'A newer version of the connected Hermes backend is ready to install.',
   availableBodyNoChangelog: 'A newer version is ready. Release notes aren’t available for this install type.',
-  availableBodyRelease: (tag: string) => `Hermes ${tag} is ready to install. The app and the agent update together.`
+  availableBodyRelease: (tag: string) => `Hermes ${tag} is ready to install.`
 }
 
 describe('resolveUpdateCopy', () => {
