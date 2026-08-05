@@ -60,31 +60,37 @@ export function resolveTargets(platform = process.platform, arch = process.arch)
       uvTarget: "x86_64-unknown-linux-gnu",
       pythonPlatform: "x86_64-unknown-linux-gnu",
       nodeDist: "linux-x64",
+      uvPython: "linux-x86_64-gnu",
     },
     "linux-arm64": {
       uvTarget: "aarch64-unknown-linux-gnu",
       pythonPlatform: "aarch64-unknown-linux-gnu",
       nodeDist: "linux-arm64",
+      uvPython: "linux-aarch64-gnu",
     },
     "darwin-x64": {
       uvTarget: "x86_64-apple-darwin",
       pythonPlatform: "x86_64-apple-darwin",
       nodeDist: "darwin-x64",
+      uvPython: "macos-x86_64-none",
     },
     "darwin-arm64": {
       uvTarget: "aarch64-apple-darwin",
       pythonPlatform: "aarch64-apple-darwin",
       nodeDist: "darwin-arm64",
+      uvPython: "macos-aarch64-none",
     },
     "win32-x64": {
       uvTarget: "x86_64-pc-windows-msvc",
       pythonPlatform: "x86_64-pc-windows-msvc",
       nodeDist: "win-x64",
+      uvPython: "windows-x86_64-none",
     },
     "win32-arm64": {
       uvTarget: "aarch64-pc-windows-msvc",
       pythonPlatform: "aarch64-pc-windows-msvc",
       nodeDist: "win-arm64",
+      uvPython: "windows-aarch64-none",
     },
   }
   const key = `${platform}-${arch}`
@@ -111,6 +117,17 @@ export function wheelDownloadArgs({ wheelsDir }) {
     "-r", "requirements-payload.txt",
     "-w", wheelsDir,
   ]
+}
+
+/**
+ * The full uv python-install request for a target: version AND platform.
+ * A bare version request ("3.11") lets uv fall back to another
+ * architecture when the native build is unavailable — the arm64 Windows
+ * test box got a silent x86_64 CPython that way. The full request either
+ * installs the right build or fails loudly.
+ */
+export function pythonRequest(target, version = process.env.HERMES_PAYLOAD_PYTHON || "3.11") {
+  return `cpython-${version}-${target.uvPython}`
 }
 
 /**
@@ -266,7 +283,10 @@ function stageUvAndPython(target, outDir) {
   // this host (emulation makes a wrong-arch binary run fine here).
   assertBanner("uv", execSync(`${JSON.stringify(uvStaged)} --version`, { encoding: "utf8" }), expect.uv)
 
-  run("uv", ["python", "install", "--install-dir", pythonDir, process.env.HERMES_PAYLOAD_PYTHON || "3.11"])
+  // --no-bin: staging must not write launcher shims into the build
+  // host's ~/.local/bin (it collided with a preexisting python3.11.exe
+  // on the Windows test box).
+  run("uv", ["python", "install", "--no-bin", "--install-dir", pythonDir, pythonRequest(target)])
 
   // The installed CPython names its architecture in `python -VV`.
   const pythonBinary = findPythonBinary(pythonDir, target)

@@ -7,6 +7,7 @@ import {
   buildManifest,
   parseSkips,
   PAYLOAD_ITEMS,
+  pythonRequest,
   resolveTag,
   resolveTargets,
   wheelDownloadArgs,
@@ -144,4 +145,13 @@ test('banner expectations name the target, not the build host', () => {
   assert.equal(bannerExpectations(linuxArm).uv, 'aarch64-unknown-linux-gnu')
   assert.equal(bannerExpectations(linuxArm).node, 'arm64')
   assert.ok(bannerExpectations(linuxArm).pythonAny.includes('aarch64'))
+})
+
+test('python install requests name the full build, not just the version', () => {
+  // A bare "3.11" lets uv substitute another architecture when the native
+  // build is missing — the silent x86_64-on-arm64 failure. The request
+  // must pin cpython-<ver>-<os>-<arch>-<libc>.
+  assert.equal(pythonRequest(resolveTargets('win32', 'arm64'), '3.11'), 'cpython-3.11-windows-aarch64-none')
+  assert.equal(pythonRequest(resolveTargets('linux', 'x64'), '3.11'), 'cpython-3.11-linux-x86_64-gnu')
+  assert.equal(pythonRequest(resolveTargets('darwin', 'arm64'), '3.12'), 'cpython-3.12-macos-aarch64-none')
 })
