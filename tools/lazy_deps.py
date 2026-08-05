@@ -92,8 +92,7 @@ logger = logging.getLogger(__name__)
 # pyproject.toml holds the specs. No other file holds them. Do not add a
 # table of pins to this module. Such a table cannot read ``[tool.uv]
 # override-dependencies``, so a backend that holds a security-pinned package
-# below its patched version downgrades that package at first use. This
-# happened with cryptography: DingTalk moved it from 50.0.0 to 48.0.1.
+# below its patched version downgrades that package at first use.
 # =============================================================================
 
 

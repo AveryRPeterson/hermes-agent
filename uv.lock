@@ -1966,8 +1966,6 @@ requires-dist = [
     { name = "hermes-agent", extras = ["audio-io"], marker = "extra == 'wake-sherpa'" },
     { name = "hermes-agent", extras = ["cli"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["cli"], marker = "extra == 'termux'" },
-    { name = "hermes-agent", extras = ["cron"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["cron"], marker = "extra == 'termux'" },
     { name = "hermes-agent", extras = ["discord"], marker = "extra == 'messaging'" },
     { name = "hermes-agent", extras = ["google"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["google"], marker = "extra == 'google-chat'" },
@@ -1979,8 +1977,6 @@ requires-dist = [
     { name = "hermes-agent", extras = ["mcp"], marker = "extra == 'computer-use'" },
     { name = "hermes-agent", extras = ["mcp"], marker = "extra == 'dev'" },
     { name = "hermes-agent", extras = ["mcp"], marker = "extra == 'termux'" },
-    { name = "hermes-agent", extras = ["pty"], marker = "extra == 'all'" },
-    { name = "hermes-agent", extras = ["pty"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["slack"], marker = "extra == 'messaging'" },
     { name = "hermes-agent", extras = ["sms"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["sms"], marker = "extra == 'termux-all'" },
@@ -2064,7 +2060,7 @@ requires-dist = [
     { name = "websockets", specifier = "==15.0.1" },
     { name = "youtube-transcript-api", marker = "extra == 'youtube'", specifier = "==1.2.4" },
 ]
-provides-extras = ["anthropic", "exa", "firecrawl", "parallel-web", "fal", "edge-tts", "modal", "daytona", "vercel", "hindsight", "dev", "telegram", "discord", "messaging", "cron", "slack", "matrix", "wecom", "cli", "tts-premium", "audio-io", "voice", "wake-openwakeword", "wake-tflite", "wake-sherpa", "wake-porcupine", "wake", "honcho", "supermemory", "mem0", "pty", "mcp", "nemo-relay", "homeassistant", "sms", "teams", "computer-use", "acp", "mistral", "otlp", "bedrock", "vertex", "silk", "trace-upload", "azure-identity", "termux", "termux-all", "dingtalk", "feishu", "google", "google-chat", "youtube", "web", "all"]
+provides-extras = ["anthropic", "bedrock", "vertex", "mistral", "azure-identity", "exa", "firecrawl", "parallel-web", "youtube", "web", "tts-premium", "edge-tts", "silk", "audio-io", "voice", "wake-openwakeword", "wake-tflite", "wake-sherpa", "wake-porcupine", "wake", "fal", "telegram", "discord", "slack", "messaging", "matrix", "wecom", "dingtalk", "feishu", "teams", "sms", "google-chat", "homeassistant", "honcho", "hindsight", "supermemory", "mem0", "modal", "daytona", "vercel", "mcp", "acp", "computer-use", "google", "otlp", "trace-upload", "cli", "termux", "termux-all", "all", "dev"]
 
 [[package]]
 name = "hf-xet"
