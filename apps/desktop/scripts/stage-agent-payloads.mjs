@@ -91,6 +91,9 @@ export function resolveTargets(platform = process.platform, arch = process.arch)
       pythonPlatform: "aarch64-pc-windows-msvc",
       nodeDist: "win-arm64",
       uvPython: "windows-aarch64-none",
+      // Pinned packages with no published win_arm64 wheel. pip builds
+      // these from sdist on the runner (needs MSVC arm64 + Rust).
+      sourceBuild: ["cryptography", "httptools", "ruamel-yaml-clib", "pywinpty"],
     },
   }
   const key = `${platform}-${arch}`
@@ -109,11 +112,23 @@ export function resolveTargets(platform = process.platform, arch = process.arch)
  * tries to build at first launch, which is offline and has no toolchain.
  * Thus the arguments refuse sdists outright. The consumer runs
  * `uv sync --frozen --offline --no-index --find-links`.
+ *
+ * Exception: the target's sourceBuild list. Some pinned packages publish
+ * no wheel for a target (win32-arm64: cryptography dropped win_arm64
+ * after 46.0.3; httptools and ruamel-yaml-clib never shipped one;
+ * pywinpty 2.x has none). For those named packages pip builds the
+ * EXACT pinned version from its sdist ON the build runner, which yields
+ * a real target-arch wheel in the payload — the user machine still
+ * never compiles. The build runner needs the toolchains (MSVC arm64 +
+ * Rust on windows-11-arm). A later --no-binary overrides --only-binary
+ * per package; the list stays empty for every target whose pins are
+ * fully covered by published wheels.
  */
-export function wheelDownloadArgs({ wheelsDir }) {
+export function wheelDownloadArgs({ wheelsDir, sourceBuild = [] }) {
   return [
     "wheel",
     "--only-binary", ":all:",
+    ...(sourceBuild.length > 0 ? ["--no-binary", sourceBuild.join(",")] : []),
     "-r", "requirements-payload.txt",
     "-w", wheelsDir,
   ]
@@ -386,7 +401,11 @@ function stageWheels(target, outDir, pythonBinary) {
   run("uv", ["export", "--frozen", "--no-emit-project", "-o", "requirements-payload.txt"], { cwd: REPO_ROOT })
   // `uv pip wheel` does not exist; uvx runs the real pip, and --python
   // makes uvx build pip's environment on the staged interpreter.
-  run("uvx", ["--python", pythonBinary, "pip", ...wheelDownloadArgs({ wheelsDir })], { cwd: REPO_ROOT })
+  run(
+    "uvx",
+    ["--python", pythonBinary, "pip", ...wheelDownloadArgs({ wheelsDir, sourceBuild: target.sourceBuild || [] })],
+    { cwd: REPO_ROOT }
+  )
 
   const bad = wrongArchWheels(fs.readdirSync(wheelsDir), target)
   if (bad.length > 0) {

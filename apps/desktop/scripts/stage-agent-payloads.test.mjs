@@ -169,3 +169,20 @@ test('python dir matcher accepts patch-versioned installs and rejects foreign bu
   assert.ok(!pattern.test('cpython-3.12.1-windows-aarch64-none'))
   assert.ok(!pattern.test('cpython-3.115-windows-aarch64-none'))
 })
+
+test('source-build exceptions override only-binary for the named packages only', () => {
+  // Fully wheel-covered targets keep the pure only-binary shape.
+  const linux = resolveTargets('linux', 'x64')
+  assert.deepEqual(wheelDownloadArgs({ wheelsDir: '/w', sourceBuild: linux.sourceBuild ?? [] }), [
+    'wheel', '--only-binary', ':all:', '-r', 'requirements-payload.txt', '-w', '/w'
+  ])
+
+  // win32-arm64 names the packages with no published win_arm64 wheel;
+  // pip's later --no-binary overrides --only-binary per package, so
+  // exactly these build from sdist and everything else stays wheels-only.
+  const winArm = resolveTargets('win32', 'arm64')
+  const args = wheelDownloadArgs({ wheelsDir: '/w', sourceBuild: winArm.sourceBuild })
+  const noBinary = args[args.indexOf('--no-binary') + 1]
+  assert.ok(args.indexOf('--no-binary') > args.indexOf('--only-binary'))
+  assert.equal(noBinary, 'cryptography,httptools,ruamel-yaml-clib,pywinpty')
+})

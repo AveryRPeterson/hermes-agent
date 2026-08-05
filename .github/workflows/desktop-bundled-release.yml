@@ -68,6 +68,12 @@ jobs:
             runner: macos-15-intel
           - label: win32-x64
             runner: windows-2025
+          # windows-11-arm carries MSVC arm64 and Rust. The staging
+          # script builds the pinned packages that publish no win_arm64
+          # wheel (cryptography, httptools, ruamel-yaml-clib, pywinpty)
+          # from sdist on this runner; user machines never compile.
+          - label: win32-arm64
+            runner: windows-11-arm
     env:
       # This is the one switch that turns on the whole bundled stack.
       HERMES_DESKTOP_BUNDLED: '1'
@@ -153,7 +159,8 @@ jobs:
           AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
         run: |
           SIGN_ARGS=()
-          if [ "${{ matrix.label }}" = "win32-x64" ] && [ -n "$AZURE_SIGN_ENDPOINT" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
+          MATRIX_LABEL="${{ matrix.label }}"
+          if [[ "$MATRIX_LABEL" == win32-* ]] && [ -n "$AZURE_SIGN_ENDPOINT" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
             echo "Windows signing: Azure Trusted Signing at $AZURE_SIGN_ENDPOINT"
             SIGN_ARGS+=(
               "-c.win.signAndEditExecutable=true"
