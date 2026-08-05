@@ -12,6 +12,7 @@ It records where a checkout came from and where its updates come from:
       "schemaVersion": 1,
       "installMode": "bundled" | "source",
       "channel": "stable" | "main",
+      "manageStyle": "adopted" | "auto-adopted" | "ejected",  # optional
       "pinnedCommit": "<sha>",       # optional
       "pinnedTag": "v0.17.0"         # optional, bundled installs only
     }
@@ -30,6 +31,19 @@ Semantics
   ``"stable"`` tracks tagged releases. The effective channel resolution lives
   in :func:`resolve_update_channel`; ``update.channel`` in config.yaml can
   override for source installs, while bundled installs are always stable.
+* ``manageStyle`` — provenance: HOW the install got into its current mode,
+  where ``installMode`` says where it is now. Vocabulary:
+
+  - ``"adopted"`` — user chose bundled explicitly (fresh installer run).
+  - ``"auto-adopted"`` — a pristine legacy checkout was silently migrated
+    into the bundled path by the desktop app at launch. Kept distinct from
+    ``"adopted"`` so a bad auto-adoption cohort can be bulk-reverted without
+    touching anyone who consented.
+  - ``"ejected"`` — user ran ``hermes update --eject``. STICKY opt-out:
+    auto-adoption must never touch a checkout that says ejected, even though
+    its ``installMode`` is plain ``"source"``.
+  - absent — legacy checkout that predates manifests (or a plain source
+    install); the only state auto-adoption may consider.
 
 Pure-stdlib leaf module: no imports from hermes_cli.config (config imports
 would drag the full config machinery into every consumer; the desktop
@@ -53,6 +67,11 @@ _VALID_MODES = (MODE_SOURCE, MODE_BUNDLED)
 CHANNEL_MAIN = "main"
 CHANNEL_STABLE = "stable"
 _VALID_CHANNELS = (CHANNEL_MAIN, CHANNEL_STABLE)
+
+STYLE_ADOPTED = "adopted"
+STYLE_AUTO_ADOPTED = "auto-adopted"
+STYLE_EJECTED = "ejected"
+_VALID_STYLES = (STYLE_ADOPTED, STYLE_AUTO_ADOPTED, STYLE_EJECTED)
 
 # Sentinel accepted in config.yaml's ``update.channel``: defer to the manifest.
 CHANNEL_AUTO = "auto"
@@ -104,6 +123,17 @@ def read_install_manifest(project_root: Optional[Path] = None) -> dict:
         manifest["installMode"] = MODE_SOURCE
     if manifest.get("channel") not in _VALID_CHANNELS:
         manifest["channel"] = CHANNEL_MAIN if manifest["installMode"] == MODE_SOURCE else CHANNEL_STABLE
+    # Unknown manageStyle values are DROPPED, not defaulted: an absent style
+    # means "adoption may consider this checkout", and inventing one would
+    # either wrongly block adoption or (worse) erase an eject opt-out written
+    # by a future vocabulary. EXCEPTION: anything that *smells* ejected stays
+    # ejected — the opt-out must survive vocabulary drift in both directions.
+    style = manifest.get("manageStyle")
+    if style is not None and style not in _VALID_STYLES:
+        if isinstance(style, str) and "eject" in style.lower():
+            manifest["manageStyle"] = STYLE_EJECTED
+        else:
+            del manifest["manageStyle"]
     manifest.setdefault("schemaVersion", INSTALL_MANIFEST_SCHEMA_VERSION)
     return manifest
 
@@ -122,6 +152,8 @@ def write_install_manifest(
         raise ValueError(f"invalid installMode: {manifest.get('installMode')!r}")
     if manifest.get("channel") not in _VALID_CHANNELS:
         raise ValueError(f"invalid channel: {manifest.get('channel')!r}")
+    if manifest.get("manageStyle") is not None and manifest["manageStyle"] not in _VALID_STYLES:
+        raise ValueError(f"invalid manageStyle: {manifest.get('manageStyle')!r}")
 
     payload = dict(manifest)
     payload.setdefault("schemaVersion", INSTALL_MANIFEST_SCHEMA_VERSION)
@@ -136,6 +168,16 @@ def write_install_manifest(
 def is_bundled_install(project_root: Optional[Path] = None) -> bool:
     """True when the running checkout was materialized from desktop payloads."""
     return read_install_manifest(project_root).get("installMode") == MODE_BUNDLED
+
+
+def is_ejected(project_root: Optional[Path] = None) -> bool:
+    """True when the user explicitly ejected this checkout from desktop management.
+
+    The sticky opt-out signal for auto-adoption: an ejected checkout must
+    never be silently re-adopted into the bundled path, even though its
+    ``installMode`` is plain ``source``.
+    """
+    return read_install_manifest(project_root).get("manageStyle") == STYLE_EJECTED
 
 
 def resolve_update_channel(

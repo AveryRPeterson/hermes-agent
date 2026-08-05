@@ -10,9 +10,13 @@ from hermes_cli.install_manifest import (
     INSTALL_MANIFEST_NAME,
     MODE_BUNDLED,
     MODE_SOURCE,
+    STYLE_ADOPTED,
+    STYLE_AUTO_ADOPTED,
+    STYLE_EJECTED,
     format_bundled_update_message,
     install_manifest_path,
     is_bundled_install,
+    is_ejected,
     read_install_manifest,
     resolve_update_channel,
     write_install_manifest,
@@ -97,6 +101,51 @@ class TestIsBundledInstall:
     def test_bundled_manifest_detected(self, tmp_path):
         write_install_manifest({"installMode": MODE_BUNDLED, "channel": CHANNEL_STABLE}, tmp_path)
         assert is_bundled_install(tmp_path)
+
+
+class TestManageStyle:
+    def test_absent_by_default(self, tmp_path):
+        assert "manageStyle" not in read_install_manifest(tmp_path)
+        assert not is_ejected(tmp_path)
+
+    def test_valid_styles_roundtrip(self, tmp_path):
+        for style in (STYLE_ADOPTED, STYLE_AUTO_ADOPTED, STYLE_EJECTED):
+            write_install_manifest(
+                {"installMode": MODE_SOURCE, "channel": CHANNEL_MAIN, "manageStyle": style},
+                tmp_path,
+            )
+            assert read_install_manifest(tmp_path)["manageStyle"] == style
+
+    def test_ejected_is_sticky_signal(self, tmp_path):
+        write_install_manifest(
+            {"installMode": MODE_SOURCE, "channel": CHANNEL_MAIN, "manageStyle": STYLE_EJECTED},
+            tmp_path,
+        )
+        assert is_ejected(tmp_path)
+
+    def test_unknown_style_dropped_not_defaulted(self, tmp_path):
+        """A future vocabulary must not wrongly block (or force) adoption."""
+        _write_raw(
+            tmp_path,
+            {"installMode": "source", "channel": "main", "manageStyle": "quantum"},
+        )
+        assert "manageStyle" not in read_install_manifest(tmp_path)
+
+    def test_eject_smelling_future_style_stays_ejected(self, tmp_path):
+        """The opt-out survives vocabulary drift: 'force-ejected' etc. reads as ejected."""
+        _write_raw(
+            tmp_path,
+            {"installMode": "source", "channel": "main", "manageStyle": "force-ejected"},
+        )
+        assert read_install_manifest(tmp_path)["manageStyle"] == STYLE_EJECTED
+        assert is_ejected(tmp_path)
+
+    def test_write_rejects_invalid_style(self, tmp_path):
+        with pytest.raises(ValueError):
+            write_install_manifest(
+                {"installMode": MODE_SOURCE, "channel": CHANNEL_MAIN, "manageStyle": "quantum"},
+                tmp_path,
+            )
 
 
 class TestResolveUpdateChannel:
