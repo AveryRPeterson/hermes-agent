@@ -43,6 +43,13 @@ param(
     [switch]$NonInteractive,
     [switch]$Json,
 
+    # --- Offline payload tree (desktop bundled artifact) ---
+    # Points at the agent-payload/ directory shipped in the bundled desktop
+    # app's resources (see apps/desktop/scripts/stage-agent-payloads.mjs).
+    # Stages that normally hit the network source locally from it instead;
+    # anything missing falls back to the stage's normal network path.
+    [string]$PayloadDir = "",
+
     # Print the paths this install would use, as JSON, and exit without
     # touching anything. The first question on any "installer says a path
     # doesn't exist" report is which paths it actually resolved -- especially
@@ -4000,17 +4007,138 @@ function Stage-Node             {
     }
 }
 function Stage-SystemPackages   { Install-SystemPackages }
-function Stage-Repository       { Install-Repository }
+function Stage-Repository       { if (-not (Invoke-PayloadStageRepository)) { Install-Repository } }
 function Stage-Venv             { Resolve-UvCmd; Install-Venv }
-function Stage-Dependencies     { Resolve-UvCmd; Install-Dependencies }
-function Stage-NodeDeps         { Install-NodeDeps }
+function Stage-Dependencies     { Resolve-UvCmd; if (-not (Invoke-PayloadStageWheels)) { Install-Dependencies } }
+function Stage-NodeDeps         { if (-not (Invoke-PayloadStageJs)) { Install-NodeDeps } }
 function Stage-Desktop          { Install-DesktopVoiceDeps; Install-Desktop }
 function Stage-Path             { Set-PathVariable }
 function Stage-ConfigTemplates  { Copy-ConfigTemplates }
 function Stage-PlatformSdks     { Resolve-UvCmd; Install-PlatformSdks }
-function Stage-BootstrapMarker  { Write-BootstrapMarker }
+function Stage-BootstrapMarker  { Write-BootstrapMarker; Write-InstallModeManifest }
 function Stage-Configure        { Invoke-SetupWizard }
 function Stage-Gateway          { Start-GatewayIfConfigured }
+
+# ─── Offline payload support (-PayloadDir; desktop bundled artifact) ───────
+# Mirror of install.sh's payload_* helpers. Each network-touching stage
+# first tries the payload; a $false return means "fall back to the normal
+# network path". Keep the two scripts in lockstep.
+
+function Get-PayloadManifest {
+    if (-not $PayloadDir) { return $null }
+    $manifestPath = Join-Path $PayloadDir "manifest.json"
+    if (-not (Test-Path $manifestPath)) { return $null }
+    try { return (Get-Content $manifestPath -Raw | ConvertFrom-Json) } catch { return $null }
+}
+
+function Test-PayloadHas {
+    param([string]$Item)
+    $m = Get-PayloadManifest
+    if (-not $m -or -not $m.items) { return $false }
+    $entry = $m.items.PSObject.Properties[$Item]
+    return ($null -ne $entry -and $entry.Value.status -eq "staged")
+}
+
+function Get-PayloadTag {
+    $m = Get-PayloadManifest
+    if ($m -and $m.tag) { return [string]$m.tag }
+    return ""
+}
+
+function Test-PayloadRefusesSourceCheckout {
+    # The eject contract: never overwrite a checkout whose .hermes-install.json
+    # says installMode source. Missing manifest is NOT a refusal.
+    $manifestPath = Join-Path $InstallDir ".hermes-install.json"
+    if (-not (Test-Path $manifestPath)) { return $false }
+    try {
+        $m = Get-Content $manifestPath -Raw | ConvertFrom-Json
+        return ($m.installMode -eq "source")
+    } catch { return $false }
+}
+
+function Invoke-PayloadStageRepository {
+    if (-not (Test-PayloadHas "repo")) { return $false }
+    if ((Test-Path $InstallDir) -and (Test-PayloadRefusesSourceCheckout)) {
+        Write-Info "Existing checkout is source-managed (ejected) - leaving it alone"
+        return $true
+    }
+    $tag = Get-PayloadTag
+    Write-Info "Materializing Hermes Agent from bundled payload ($tag)..."
+    $payloadRepo = Join-Path $PayloadDir "repo"
+    if (Test-Path (Join-Path $InstallDir ".git")) {
+        $payloadHead = (& git -C $payloadRepo rev-parse HEAD 2>$null)
+        if (-not $payloadHead) { return $false }
+        & git -C $InstallDir fetch $payloadRepo HEAD 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        & git -C $InstallDir checkout -B main $payloadHead 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+        & git -C $InstallDir reset --hard $payloadHead 2>&1 | Out-Null
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } else {
+        if (Test-Path $InstallDir) { Remove-Item -Recurse -Force $InstallDir }
+        $parent = Split-Path $InstallDir -Parent
+        if (-not (Test-Path $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+        Copy-Item -Recurse $payloadRepo $InstallDir
+    }
+    Write-Success "Checkout materialized offline at $tag"
+    return $true
+}
+
+function Invoke-PayloadStageWheels {
+    if (-not (Test-PayloadHas "wheels")) { return $false }
+    Write-Info "Installing Python dependencies from bundled wheelhouse..."
+    $wheels = Join-Path $PayloadDir "wheels"
+    Push-Location $InstallDir
+    try {
+        & $script:UvCmd sync --frozen --offline --no-index --find-links $wheels --inexact
+        if ($LASTEXITCODE -ne 0) { return $false }
+    } finally { Pop-Location }
+    Write-Success "Python dependencies installed offline"
+    return $true
+}
+
+function Invoke-PayloadStageJs {
+    if (-not (Test-PayloadHas "js-prebuilt")) { return $false }
+    $archive = Join-Path $PayloadDir "js-prebuilt.tar.zst"
+    if (-not (Test-Path $archive)) { return $false }
+    Write-Info "Unpacking prebuilt JS surfaces (no npm needed)..."
+    # Windows 10 1803+ ships bsdtar as tar.exe with zstd support.
+    & tar --zstd -xf $archive -C $InstallDir 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { return $false }
+    Write-Success "Prebuilt JS surfaces unpacked"
+    return $true
+}
+
+function Write-InstallModeManifest {
+    # Decide + write .hermes-install.json at install completion. NEVER
+    # overwrites an ejected manifest — the opt-out is sticky.
+    if (-not (Test-Path $InstallDir)) { return }
+    $manifestPath = Join-Path $InstallDir ".hermes-install.json"
+    if (Test-Path $manifestPath) {
+        try {
+            $existing = Get-Content $manifestPath -Raw | ConvertFrom-Json
+            if ($existing.manageStyle -eq "ejected") {
+                Write-Info "Install manifest says ejected - preserving it"
+                return
+            }
+        } catch { }
+    }
+    $payload = ($PayloadDir -and (Test-PayloadHas "repo") -and -not (Test-PayloadRefusesSourceCheckout))
+    $obj = [ordered]@{ schemaVersion = 1 }
+    if ($payload) {
+        $obj.installMode = "bundled"
+        $obj.channel = "stable"
+        $obj.manageStyle = "adopted"
+        $tag = Get-PayloadTag
+        if ($tag) { $obj.pinnedTag = $tag }
+    } else {
+        $obj.installMode = "source"
+        $obj.channel = "main"
+    }
+    $tmp = "$manifestPath.tmp"
+    ($obj | ConvertTo-Json) + "`n" | Set-Content -Path $tmp -Encoding utf8
+    Move-Item -Force $tmp $manifestPath
+}
 
 function Get-InstallStage {
     param([string]$Name)
