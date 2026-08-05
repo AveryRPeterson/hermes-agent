@@ -262,6 +262,11 @@ function stageRepo(tag, outDir) {
 function stageUvAndPython(target, outDir) {
   const uvDir = path.join(outDir, "uv")
   const pythonDir = path.join(outDir, "python")
+  // Wipe before staging (stageRepo does the same). A rerun after a failed
+  // or wrong-arch attempt must not leave a stale interpreter beside the
+  // new one — the banner probe would find the old build first.
+  fs.rmSync(uvDir, { recursive: true, force: true })
+  fs.rmSync(pythonDir, { recursive: true, force: true })
   fs.mkdirSync(uvDir, { recursive: true })
   fs.mkdirSync(pythonDir, { recursive: true })
   // Native runner: the uv that runs this build IS the target-platform uv.
@@ -297,10 +302,20 @@ function stageUvAndPython(target, outDir) {
 }
 
 function findPythonBinary(pythonDir, target) {
-  // uv installs into <dir>/cpython-<ver>-<os>-<triple>/… — find the one
-  // interpreter under the install dir rather than hardcoding the layout.
+  // uv installs into <dir>/cpython-<ver>-<os>-<triple>/… — search only
+  // inside directories that match the REQUESTED build (pythonRequest),
+  // so a stray install of another architecture can never satisfy the
+  // probe. The wipe above should prevent strays; this is the backstop.
   const name = target.platform === "win32" ? "python.exe" : "python3"
-  const stack = [pythonDir]
+  const wanted = pythonRequest(target)
+  const roots = fs
+    .readdirSync(pythonDir, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && e.name.startsWith(wanted))
+    .map((e) => path.join(pythonDir, e.name))
+  if (roots.length === 0) {
+    throw new Error(`python: no ${wanted}* directory under ${pythonDir} after uv python install`)
+  }
+  const stack = [...roots]
   while (stack.length) {
     const dir = stack.pop()
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -312,7 +327,7 @@ function findPythonBinary(pythonDir, target) {
       }
     }
   }
-  throw new Error(`python: no ${name} found under ${pythonDir} after uv python install`)
+  throw new Error(`python: no ${name} found under ${roots.join(", ")}`)
 }
 
 /**
