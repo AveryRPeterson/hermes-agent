@@ -242,47 +242,32 @@ class TestIsSatisfiedVersionAware:
         assert ld._is_satisfied(spec) is True
         assert ld.feature_missing("tool.trace_upload") == ()
 
-    @pytest.mark.parametrize(
-        ("feature", "installed_versions", "expected_repairs"),
-        [
-            (
-                "skill.google_workspace",
-                {
-                    "google-api-python-client": "2.194.0",
-                    "google-auth": "2.55.0",
-                    "google-auth-oauthlib": "1.3.1",
-                    "google-auth-httplib2": "0.3.1",
-                    "httplib2": "0.31.2",
-                    "pyasn1": "0.6.3",
-                },
-                (
-                    "google-auth==2.55.1",
-                    "httplib2==0.32.0",
-                    "pyasn1==0.6.4",
-                ),
-            ),
-            (
-                "provider.vertex",
-                {
-                    "google-auth": "2.55.1",
-                    "pyasn1": "0.6.3",
-                },
-                ("pyasn1==0.6.4",),
-            ),
-        ],
-    )
-    def test_google_features_repair_stale_transitives(
-        self,
-        monkeypatch,
-        feature,
-        installed_versions,
-        expected_repairs,
-    ):
+    def test_only_the_stale_specs_of_a_feature_are_reinstalled(self, monkeypatch):
+        """ensure() repairs the stale specs and leaves the current ones.
+
+        A feature usually shares packages with the core install or with
+        another feature. Reinstalling the whole set would churn packages that
+        already meet their spec, and a reinstall can move a shared transitive
+        that something else depends on.
+
+        The versions here are invented. A test that names the real pins of a
+        real extra fails on each routine bump without finding a fault.
+        """
+        installed_versions = {
+            "zzz-current": "2.0.0",   # meets its spec
+            "zzz-stale": "1.0.0",     # below its spec
+            # zzz-absent is not installed at all
+        }
         self._fake_version(monkeypatch, installed_versions)
+        _register_fake_feature(
+            monkeypatch, "test.partial",
+            ("zzz-current==2.0.0", "zzz-stale==1.5.0", "zzz-absent==3.0.0"),
+        )
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
-        # Force the pip ladder: uv sync would shell out for real, and this
-        # test is about WHICH stale specs get repaired, not the installer.
+        # Force the pip tier. uv sync would run a real subprocess, and this
+        # test is about WHICH specs get repaired, not about the installer.
         monkeypatch.setattr(ld, "_uv_sync_extra", lambda _f: None)
+
         installed = []
 
         def fake_install(specs, **kwargs):
@@ -294,11 +279,10 @@ class TestIsSatisfiedVersionAware:
 
         monkeypatch.setattr(ld, "_venv_pip_install", fake_install)
 
-        ld.ensure(feature, prompt=False)
+        ld.ensure("test.partial", prompt=False)
 
-        # Order follows the extra's declaration order, which composition can
-        # legitimately reshuffle — assert the SET of stale pins repaired.
-        assert set(installed) == set(expected_repairs)
+        assert set(installed) == {"zzz-stale==1.5.0", "zzz-absent==3.0.0"}
+        assert "zzz-current==2.0.0" not in installed
 
 
 # ---------------------------------------------------------------------------
