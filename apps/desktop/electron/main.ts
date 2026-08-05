@@ -32,6 +32,7 @@ import {
 import nodePty from 'node-pty'
 
 import { classifyActiveRuntime } from './active-runtime-state'
+import { applyAppUpdate, checkAppUpdate, shouldUseAppUpdater } from './app-updater'
 import { stopBackendChild as stopBackendChildImpl } from './backend-child'
 import { dashboardFallbackArgs, sourceDeclaresServe } from './backend-command'
 import { createBackendConnectionState } from './backend-connection-state'
@@ -2472,6 +2473,13 @@ async function resolveHealedBranch(updateRoot, branch) {
 }
 
 async function checkUpdates() {
+  // Bundled installs update through the app updater (GitHub Releases feed),
+  // not through git. The gate reads the install manifest, so an ejected
+  // checkout falls through to the git path below.
+  if (bundledUpdaterActive()) {
+    return checkAppUpdate(app.getVersion())
+  }
+
   const updateRoot = resolveUpdateRoot()
   let { branch } = readDesktopUpdateConfig()
   const gitDir = path.join(updateRoot, '.git')
@@ -2852,6 +2860,22 @@ async function releaseBackendLock(updateRoot, tag) {
 async function applyUpdates(opts = {}) {
   if (updateInFlight) {
     throw new Error('An update is already in progress.')
+  }
+
+  // Bundled installs: download the new app from the GitHub Releases feed,
+  // then quit and install. After the relaunch, the marker-tag mismatch
+  // triggers the offline agent rebuild — no git, no venv mutation while
+  // the app runs, and the Windows setup-binary handoff is unnecessary.
+  if (bundledUpdaterActive()) {
+    updateInFlight = true
+
+    try {
+      return await applyAppUpdate(percent =>
+        emitUpdateProgress({ stage: 'download', message: 'Downloading the app update…', percent })
+      )
+    } finally {
+      updateInFlight = false
+    }
   }
 
   updateInFlight = true
@@ -3635,6 +3659,22 @@ function readBootstrapMarker() {
 // pre-pull modules, so it only stages. Fresh processes apply.
 
 const INSTALL_MANIFEST_PATH = path.join(ACTIVE_HERMES_ROOT, '.hermes-install.json')
+
+/**
+ * True when app updates go through electron-updater instead of git.
+ * Reads the manifest on every call. An eject flips the manifest to source
+ * mode, and the next check must honor that without an app restart.
+ */
+function bundledUpdaterActive(): boolean {
+  const stamp = INSTALL_STAMP as any
+  const manifest = readJson(INSTALL_MANIFEST_PATH) as any
+
+  return shouldUseAppUpdater({
+    stampHasPayload: Boolean(stamp && stamp.payload),
+    installMode: manifest && typeof manifest.installMode === 'string' ? manifest.installMode : null,
+    isPackaged: app.isPackaged
+  })
+}
 
 const adoptionGitRunner: GitRunner = (args, cwd) => {
   try {
