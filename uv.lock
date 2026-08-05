@@ -50,17 +50,8 @@ dependencies = [
 ]
 wheels = [
     { url = "https://files.pythonhosted.org/packages/b6/3d/41a85023e1c6cc76d895f3ba6ac7c22b0785db7e08d0827ebeb8a403eefc/ai_edge_litert-2.1.6-cp311-cp311-macosx_12_0_arm64.whl", hash = "sha256:edf598814004e594b40c888f52cae59e950dbeffd821e83ba45d28db0a0aa3f5", size = 10031164, upload-time = "2026-07-01T21:42:50.986Z" },
-    { url = "https://files.pythonhosted.org/packages/53/b5/da7057bfd08f270b5d924c4daba62a583df6dc25d916955fc7543d1c8847/ai_edge_litert-2.1.6-cp311-cp311-manylinux_2_27_aarch64.whl", hash = "sha256:8475d18c73698d9244380ad72f67caf540e5c72d9a80c66d17c4b81ca81a21c8", size = 13065484, upload-time = "2026-07-01T21:02:27.896Z" },
-    { url = "https://files.pythonhosted.org/packages/b2/b9/c7153b2f6f37bc521876b8fa86125eb618bba9d84b20ba0bc5c05795eda7/ai_edge_litert-2.1.6-cp311-cp311-manylinux_2_27_x86_64.whl", hash = "sha256:af4f2ba681fa2c688746cbd7ddd71a2bbbdd9e6a51aa609d382bfad77d1c695e", size = 17328951, upload-time = "2026-07-01T20:59:23.82Z" },
-    { url = "https://files.pythonhosted.org/packages/87/0f/031a56bc95a7109f4a71ec5510a34214d5f9d99ff01a926fb2129ec2288b/ai_edge_litert-2.1.6-cp311-cp311-win_amd64.whl", hash = "sha256:b20f4c8cdbbf6f64e3baa77853e55a1b29515a45d6dfbe6b2ced9b3a1efb5807", size = 16587870, upload-time = "2026-07-01T21:43:43.398Z" },
     { url = "https://files.pythonhosted.org/packages/52/d5/164aaf69f60f72b7076900ef1cc6153bf50d82cd15202bdf1239c0dbfb1c/ai_edge_litert-2.1.6-cp312-cp312-macosx_12_0_arm64.whl", hash = "sha256:5adf0c9afde6151dc7f2989d039c800f3060d98d40bb5dfc95e426ad4eb3680b", size = 10033170, upload-time = "2026-07-01T21:42:53.208Z" },
-    { url = "https://files.pythonhosted.org/packages/b7/24/4f490bc5df4e3c5e796de20437804da9982e565cb9eba0d862eb20efa2b7/ai_edge_litert-2.1.6-cp312-cp312-manylinux_2_27_aarch64.whl", hash = "sha256:e8aa6393e1293fac837f764b5a9ba3ef81bb16068c94a2068d9dfb109a24e3b9", size = 13066237, upload-time = "2026-07-01T21:02:30.375Z" },
-    { url = "https://files.pythonhosted.org/packages/39/df/08defcb80cfe1782a51b58184300ca592f302d7cd1e3d26d5adcd11bb588/ai_edge_litert-2.1.6-cp312-cp312-manylinux_2_27_x86_64.whl", hash = "sha256:0156d9051c9a2500cd4c4ecedb77676eff0b45bd8efb1001e8e730a8cd0db4ee", size = 17332723, upload-time = "2026-07-01T20:59:25.961Z" },
-    { url = "https://files.pythonhosted.org/packages/ef/3a/d4236d7a971c70eceeb957f2f186db16fa46dc0fa27fd30e1b2ef075cace/ai_edge_litert-2.1.6-cp312-cp312-win_amd64.whl", hash = "sha256:f722298b070343e24634ab51a55b7185d32d8f84d4df8659f9d2989e76d7d63f", size = 16589039, upload-time = "2026-07-01T21:43:45.484Z" },
     { url = "https://files.pythonhosted.org/packages/ad/92/578b31c4c05afa9081a664cd86afe33c304fecd70de1c2a4d3a3b9ca51c9/ai_edge_litert-2.1.6-cp313-cp313-macosx_12_0_arm64.whl", hash = "sha256:2e8a3f92fa407690189533bea8b64d49bb1b8a9e96f707ba27e1a64a9c3cc8cf", size = 10032950, upload-time = "2026-07-01T21:42:55.102Z" },
-    { url = "https://files.pythonhosted.org/packages/4f/f6/277760deec426c52d4138eb406750d23e83eff22562201214ba867eac5c0/ai_edge_litert-2.1.6-cp313-cp313-manylinux_2_27_aarch64.whl", hash = "sha256:5819dcafe62005483744636dfe429fcd429a29ba382187eeb156dda2ada2f82c", size = 13066200, upload-time = "2026-07-01T21:02:32.768Z" },
-    { url = "https://files.pythonhosted.org/packages/b3/8e/9264ce26ca8735f716b5f1ac6e76e37370e271da1010bf1a9a46c2a9771b/ai_edge_litert-2.1.6-cp313-cp313-manylinux_2_27_x86_64.whl", hash = "sha256:c7c93fb0dc2a1d45750443731d0193974737f9f1ffb36eb6c1889bdfb61bf091", size = 17332407, upload-time = "2026-07-01T20:59:28.161Z" },
-    { url = "https://files.pythonhosted.org/packages/26/ac/3baf781f2ff2bbab4bd2ea78d6c395ad135202b4dcd9a8cc1d760776f223/ai_edge_litert-2.1.6-cp313-cp313-win_amd64.whl", hash = "sha256:282f3521e31d9d1cb4f60143f6b64fa07a8ac8488b098c37c809b574fa3dc264", size = 16589190, upload-time = "2026-07-01T21:43:47.599Z" },
 ]
 
 [[package]]
@@ -1902,7 +1893,7 @@ wake-sherpa = [
     { name = "sounddevice" },
 ]
 wake-tflite = [
-    { name = "ai-edge-litert" },
+    { name = "ai-edge-litert", marker = "sys_platform == 'darwin'" },
 ]
 web = [
     { name = "fastapi" },
@@ -1920,7 +1911,7 @@ youtube = [
 [package.metadata]
 requires-dist = [
     { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = "==0.9.0" },
-    { name = "ai-edge-litert", marker = "extra == 'wake-tflite'", specifier = "==2.1.6" },
+    { name = "ai-edge-litert", marker = "sys_platform == 'darwin' and extra == 'wake-tflite'", specifier = "==2.1.6" },
     { name = "aiohttp", marker = "extra == 'discord'", specifier = "==3.14.3" },
     { name = "aiohttp", marker = "extra == 'homeassistant'", specifier = "==3.14.3" },
     { name = "aiohttp", marker = "extra == 'matrix'", specifier = "==3.14.3" },
@@ -1987,7 +1978,7 @@ requires-dist = [
     { name = "hermes-agent", extras = ["wake-openwakeword"], marker = "extra == 'wake'" },
     { name = "hermes-agent", extras = ["wake-porcupine"], marker = "extra == 'wake'" },
     { name = "hermes-agent", extras = ["wake-sherpa"], marker = "extra == 'wake'" },
-    { name = "hermes-agent", extras = ["wake-tflite"], marker = "sys_platform == 'darwin' and extra == 'wake'" },
+    { name = "hermes-agent", extras = ["wake-tflite"], marker = "extra == 'wake'" },
     { name = "hermes-agent", extras = ["web"], marker = "extra == 'all'" },
     { name = "hermes-agent", extras = ["web"], marker = "extra == 'termux-all'" },
     { name = "hermes-agent", extras = ["youtube"], marker = "extra == 'all'" },

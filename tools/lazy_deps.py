@@ -204,12 +204,6 @@ def _optional_dependencies() -> dict[str, tuple[str, ...]]:
 _SELF_REF = re.compile(r"^hermes[-_]agent\[([^\]]+)\]$", re.IGNORECASE)
 
 
-def _split_marker(spec: str) -> tuple[str, str]:
-    """Split ``"pkg[extra]; marker"`` into ``("pkg[extra]", "; marker")``."""
-    head, sep, tail = spec.partition(";")
-    return head.strip(), (f";{tail}" if sep else "")
-
-
 def extra_specs(extra: str, _seen: Optional[frozenset] = None) -> tuple[str, ...]:
     """Return the specs for ``extra`` and expand each ``hermes-agent[...]``.
 
@@ -219,10 +213,9 @@ def extra_specs(extra: str, _seen: Optional[frozenset] = None) -> tuple[str, ...
     the references make a loop, or point to an extra that does not exist,
     the function returns nothing and does not repeat forever.
 
-    The function copies a marker on a reference to each expanded spec. Thus
-    ``hermes-agent[wake-tflite]; platform_system == 'Darwin'`` gives
-    ``ai-edge-litert==2.1.6; platform_system == 'Darwin'``. pip and uv
-    install this same set.
+    A marker belongs on the pin inside the extra that holds it, not on the
+    reference. _is_satisfied reads the marker, so a spec for another
+    platform needs no install here.
     """
     seen = _seen or frozenset()
     if extra in seen:
@@ -239,20 +232,11 @@ def extra_specs(extra: str, _seen: Optional[frozenset] = None) -> tuple[str, ...
             out.append(spec)
 
     for spec in table[extra]:
-        head, marker = _split_marker(spec)
-        m = _SELF_REF.match(head)
+        m = _SELF_REF.match(spec)
         if m:
             for sub in m.group(1).split(","):
                 for nested in extra_specs(sub.strip(), seen):
-                    if not marker:
-                        _add(nested)
-                        continue
-                    n_head, n_marker = _split_marker(nested)
-                    # Both sides carry a marker: they must BOTH hold.
-                    _add(
-                        f"{n_head}{n_marker} and{marker[1:]}"
-                        if n_marker else f"{n_head}{marker}"
-                    )
+                    _add(nested)
         else:
             _add(spec)
     return tuple(out)
@@ -599,16 +583,21 @@ def _pkg_name_from_spec(spec: str) -> str:
 def _is_satisfied(spec: str) -> bool:
     """Is ``spec`` already met in this environment?
 
-    Checks the version as well as presence. An installed version outside the
-    spec's range gives False, so the caller moves it to the pinned version.
-    This is how `hermes update` carries a pin bump to a backend that a user
-    installed at an older version.
+    Checks the version, not only presence, so `hermes update` carries a pin
+    bump to a backend that a user installed at an older version.
 
-    A spec that does not parse gives True, and so does a version that does
-    not parse. Neither is a reason to reinstall a working package.
+    A spec whose marker is false for this host counts as met. There is
+    nothing to install: ``ai-edge-litert`` is for macOS, and asking pip for
+    it on Linux gets an error, not a package.
+
+    ``SpecifierSet.contains`` covers the rest. An empty specifier accepts
+    any version, and a version string it cannot read gives False, which
+    reinstalls and repairs the entry.
     """
     req = _parse_spec(spec)
     if req is None:
+        return True
+    if req.marker is not None and not req.marker.evaluate():
         return True
 
     from importlib.metadata import PackageNotFoundError, version
@@ -617,36 +606,17 @@ def _is_satisfied(spec: str) -> bool:
         installed = version(req.name)
     except (PackageNotFoundError, Exception):
         return False
-
-    if not req.specifier:
-        # No version constraint. Presence is enough.
-        return True
-    from packaging.version import InvalidVersion, Version
-
-    try:
-        return Version(installed) in req.specifier
-    except InvalidVersion:
-        return True
+    return req.specifier.contains(installed, prereleases=True)
 
 
 def _is_present(spec: str) -> bool:
-    """Cheap presence-only check (package name installed at any version).
+    """Is the package installed, at any version?
 
-    Used by :func:`active_features` to detect backends the user has
-    previously activated, regardless of whether the version pin moved.
+    :func:`active_features` uses this to find the backends that a user
+    turned on. A moved pin must still count as active, so drop the version
+    and ask only about the name.
     """
-    pkg = _pkg_name_from_spec(spec)
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-    except ImportError:
-        return False
-    try:
-        version(pkg)
-        return True
-    except PackageNotFoundError:
-        return False
-    except Exception:
-        return False
+    return _is_satisfied(_pkg_name_from_spec(spec))
 
 
 def _run(

@@ -7,7 +7,7 @@ Nothing else checks that. A typo makes the feature raise FeatureUnavailable
 at first use, on the one machine that enabled that backend.
 
 The reader: extra_specs expands a `hermes-agent[x]` reference, and that code
-is ours. A cycle, a lost marker, or a silent empty result would each ship a
+is ours. A cycle or a silent empty result would each ship a
 wrong package set. uv resolves the extras its own way and cannot catch a
 fault in our reader.
 
@@ -80,17 +80,17 @@ class TestExtraComposition:
         monkeypatch.setattr(ld, "_optional_dependencies", lambda: {})
         assert ld.extra_specs("nope") == ()
 
-    def test_marker_on_self_reference_is_distributed(self, monkeypatch):
-        """`hermes-agent[x]; marker` must put the marker on each spec.
+    def test_a_marker_on_a_pin_survives_composition(self, monkeypatch):
+        """A composed extra must keep the marker that its leaf pin carries.
 
-        [wake] holds `hermes-agent[wake-tflite]; platform_system == 'Darwin'`.
-        Losing that marker installs a macOS-only package on Linux.
+        [wake] contains [wake-tflite], whose pin is macOS-only. Dropping
+        the marker on the way out installs that package on Linux.
         """
         monkeypatch.setattr(ld, "_optional_dependencies", lambda: {
-            "big": ("hermes-agent[small]; platform_system == 'Darwin'",),
-            "small": ("pkg-a==1.0", "pkg-b==2.0"),
+            "big": ("hermes-agent[small]", "pkg-c==3.0"),
+            "small": ("pkg-a==1.0; platform_system == 'Darwin'",),
         })
         assert set(ld.extra_specs("big")) == {
             "pkg-a==1.0; platform_system == 'Darwin'",
-            "pkg-b==2.0; platform_system == 'Darwin'",
+            "pkg-c==3.0",
         }

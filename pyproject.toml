@@ -260,7 +260,11 @@ wake-openwakeword = [
 # (dscripka/openWakeWord#336), so the wake word runs on tflite there.
 # Upstream declares tflite-runtime for Linux only; ai-edge-litert is the
 # macOS equivalent, bridged in tools/wake_word.py.
-wake-tflite = ["ai-edge-litert==2.1.6"]
+#
+# The marker belongs on the pin, not on the reference in [wake]. A reader
+# of this extra can then see where the package applies, and lazy_deps skips
+# it on a host where the marker is false.
+wake-tflite = ["ai-edge-litert==2.1.6; platform_system == 'Darwin'"]
 wake-sherpa = [
   "hermes-agent[audio-io]",
   "sherpa-onnx==1.13.4",
@@ -274,7 +278,7 @@ wake = [
   "hermes-agent[wake-openwakeword]",
   "hermes-agent[wake-sherpa]",
   "hermes-agent[wake-porcupine]",
-  "hermes-agent[wake-tflite]; platform_system == 'Darwin'",
+  "hermes-agent[wake-tflite]",
 ]
 
 # --------------------------------------------------------------------------

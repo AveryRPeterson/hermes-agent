@@ -127,6 +127,33 @@ class TestIsAvailable:
         assert ld.is_available("test.miss") is False
 
 
+class TestMarkersDecideWhetherThereIsWork:
+    """A spec for another platform must not become an install attempt.
+
+    [wake-tflite] pins ai-edge-litert for macOS. On Linux there is no such
+    wheel, so an install gets an error and not a package.
+    """
+
+    def test_a_spec_for_another_platform_counts_as_satisfied(self):
+        assert ld._is_satisfied("zzzfake==1.0; sys_platform == 'nonesuch'")
+
+    def test_a_spec_for_this_platform_still_installs(self, monkeypatch):
+        import sys as _sys
+
+        here = f"zzzfake==1.0; sys_platform == '{_sys.platform}'"
+        assert ld._is_satisfied(here) is False
+
+    def test_the_feature_is_available_when_its_marker_is_false(
+        self, monkeypatch
+    ):
+        _register_fake_feature(
+            monkeypatch, "test.elsewhere",
+            ("zzzfake==1.0; sys_platform == 'nonesuch'",),
+        )
+        assert ld.feature_missing("test.elsewhere") == ()
+        assert ld.is_available("test.elsewhere") is True
+
+
 # ---------------------------------------------------------------------------
 # active_features + refresh_active_features (Piece A — hermes update wiring)
 # ---------------------------------------------------------------------------
