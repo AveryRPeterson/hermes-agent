@@ -301,19 +301,32 @@ function stageUvAndPython(target, outDir) {
   }
 }
 
+/**
+ * Match the directory `uv python install` creates for a request. The
+ * request names a minor version (cpython-3.11-windows-aarch64-none), and
+ * uv installs into a PATCH-versioned directory
+ * (cpython-3.11.15-windows-aarch64-none) plus a minor-version alias that
+ * is a junction on Windows. The matcher accepts both shapes and nothing
+ * of any other version or triple.
+ */
+export function pythonDirPattern(target, version = process.env.HERMES_PAYLOAD_PYTHON || "3.11") {
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  return new RegExp(`^cpython-${escape(version)}(\\.\\d+)?(rc\\d+)?-${escape(target.uvPython)}$`)
+}
+
 function findPythonBinary(pythonDir, target) {
-  // uv installs into <dir>/cpython-<ver>-<os>-<triple>/… — search only
-  // inside directories that match the REQUESTED build (pythonRequest),
-  // so a stray install of another architecture can never satisfy the
-  // probe. The wipe above should prevent strays; this is the backstop.
+  // Search only directories that match the REQUESTED build, so a stray
+  // install of another architecture can never satisfy the probe. The
+  // wipe above should prevent strays; this is the backstop. The alias
+  // entry is a junction/symlink — do not require isDirectory().
   const name = target.platform === "win32" ? "python.exe" : "python3"
-  const wanted = pythonRequest(target)
+  const pattern = pythonDirPattern(target)
   const roots = fs
     .readdirSync(pythonDir, { withFileTypes: true })
-    .filter((e) => e.isDirectory() && e.name.startsWith(wanted))
+    .filter((e) => (e.isDirectory() || e.isSymbolicLink()) && pattern.test(e.name))
     .map((e) => path.join(pythonDir, e.name))
   if (roots.length === 0) {
-    throw new Error(`python: no ${wanted}* directory under ${pythonDir} after uv python install`)
+    throw new Error(`python: nothing matching ${pattern} under ${pythonDir} after uv python install`)
   }
   const stack = [...roots]
   while (stack.length) {

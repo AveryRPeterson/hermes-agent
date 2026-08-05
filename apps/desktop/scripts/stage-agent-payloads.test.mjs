@@ -7,6 +7,7 @@ import {
   buildManifest,
   parseSkips,
   PAYLOAD_ITEMS,
+  pythonDirPattern,
   pythonRequest,
   resolveTag,
   resolveTargets,
@@ -154,4 +155,17 @@ test('python install requests name the full build, not just the version', () => 
   assert.equal(pythonRequest(resolveTargets('win32', 'arm64'), '3.11'), 'cpython-3.11-windows-aarch64-none')
   assert.equal(pythonRequest(resolveTargets('linux', 'x64'), '3.11'), 'cpython-3.11-linux-x86_64-gnu')
   assert.equal(pythonRequest(resolveTargets('darwin', 'arm64'), '3.12'), 'cpython-3.12-macos-aarch64-none')
+})
+
+test('python dir matcher accepts patch-versioned installs and rejects foreign builds', () => {
+  const winArm = resolveTargets('win32', 'arm64')
+  const pattern = pythonDirPattern(winArm, '3.11')
+
+  // uv creates the patch-versioned directory plus a minor-version alias.
+  assert.ok(pattern.test('cpython-3.11.15-windows-aarch64-none'))
+  assert.ok(pattern.test('cpython-3.11-windows-aarch64-none'))
+  // Another arch, another version, or a partial name must not match.
+  assert.ok(!pattern.test('cpython-3.11.15-windows-x86_64-none'))
+  assert.ok(!pattern.test('cpython-3.12.1-windows-aarch64-none'))
+  assert.ok(!pattern.test('cpython-3.115-windows-aarch64-none'))
 })
