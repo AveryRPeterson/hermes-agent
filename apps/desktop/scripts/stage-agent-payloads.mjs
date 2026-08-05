@@ -114,6 +114,45 @@ export function wheelDownloadArgs({ wheelsDir }) {
 }
 
 /**
+ * Assert that a staged tool's own version banner names the target triple.
+ * `uv --version` and `python -VV` both print their build triple/platform.
+ * A mismatch means the payload carries the WRONG architecture (for
+ * example, an x64 uv copied from PATH into an arm64 artifact — it runs
+ * on the build host through emulation and ships broken). The manifest
+ * would then lie about the payload's contents. Fail the build instead.
+ */
+export function assertBanner(item, banner, mustContain) {
+  if (!banner.includes(mustContain)) {
+    throw new Error(
+      `${item}: staged binary reports "${banner.trim()}" which does not ` +
+        `contain the build target "${mustContain}" — wrong-architecture ` +
+        `payload. Provide a matching binary (HERMES_PAYLOAD_UV for uv) or ` +
+        `build on a native runner.`
+    )
+  }
+}
+
+/**
+ * The substring that each staged tool's banner must contain for a target.
+ * uv prints a full triple (x86_64-pc-windows-msvc). CPython's `python -VV`
+ * prints a compiler/platform line that differs per OS, so the check keys
+ * on the architecture words for it. Node prints nothing useful in
+ * --version, so its check uses `node -p process.arch` = target arch.
+ */
+export function bannerExpectations(target) {
+  const archWords = {
+    x64: ["x86_64", "AMD64", "x64"],
+    arm64: ["aarch64", "ARM64", "arm64"],
+  }[target.arch]
+
+  return {
+    uv: target.uvTarget,
+    pythonAny: archWords,
+    node: target.arch,
+  }
+}
+
+/**
  * Resolve the release tag to stage. CI passes --tag=vX.Y.Z. Local runs can
  * fall back to `git describe` for smoke tests. When bundling was requested
  * and no tag exists, payload staging is a hard error. A bundled artifact
@@ -218,8 +257,68 @@ function stageUvAndPython(target, outDir) {
       target.platform === "win32" ? "where uv" : "command -v uv",
       { encoding: "utf8" }
     ).split(/\r?\n/)[0].trim()
-  fs.copyFileSync(uvSource, path.join(uvDir, uvName))
+  const uvStaged = path.join(uvDir, uvName)
+  fs.copyFileSync(uvSource, uvStaged)
+
+  const expect = bannerExpectations(target)
+
+  // The staged uv must be built FOR the target triple, not merely run on
+  // this host (emulation makes a wrong-arch binary run fine here).
+  assertBanner("uv", execSync(`${JSON.stringify(uvStaged)} --version`, { encoding: "utf8" }), expect.uv)
+
   run("uv", ["python", "install", "--install-dir", pythonDir, process.env.HERMES_PAYLOAD_PYTHON || "3.11"])
+
+  // The installed CPython names its architecture in `python -VV`.
+  const pythonBinary = findPythonBinary(pythonDir, target)
+  const pythonBanner = execSync(`${JSON.stringify(pythonBinary)} -VV`, { encoding: "utf8" })
+  if (!expect.pythonAny.some((word) => pythonBanner.includes(word))) {
+    assertBanner("python", pythonBanner, expect.pythonAny.join("|"))
+  }
+}
+
+function findPythonBinary(pythonDir, target) {
+  // uv installs into <dir>/cpython-<ver>-<os>-<triple>/… — find the one
+  // interpreter under the install dir rather than hardcoding the layout.
+  const name = target.platform === "win32" ? "python.exe" : "python3"
+  const stack = [pythonDir]
+  while (stack.length) {
+    const dir = stack.pop()
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, entry.name)
+      if (entry.isDirectory() && !entry.isSymbolicLink()) {
+        stack.push(full)
+      } else if (entry.name === name) {
+        return full
+      }
+    }
+  }
+  throw new Error(`python: no ${name} found under ${pythonDir} after uv python install`)
+}
+
+/**
+ * Check a wheelhouse file list against the target. Returns the offending
+ * names. A wheel is wrong when its platform tag names another OS or
+ * another architecture. Pure-python wheels (`none-any`) are always fine.
+ * pip resolves tags for the interpreter that RUNS it, so a wrong-arch
+ * python (or an emulated one) fills the wheelhouse with wheels the
+ * payload's CPython cannot import — at first launch, offline.
+ */
+export function wrongArchWheels(fileNames, target) {
+  const want = {
+    "linux-x64": /manylinux.*x86_64|musllinux.*x86_64|linux_x86_64/,
+    "linux-arm64": /manylinux.*aarch64|musllinux.*aarch64|linux_aarch64/,
+    "darwin-x64": /macosx.*(x86_64|universal2|intel)/,
+    "darwin-arm64": /macosx.*(arm64|universal2)/,
+    "win32-x64": /win_amd64/,
+    "win32-arm64": /win_arm64/,
+  }[target.key]
+
+  return fileNames.filter((name) => {
+    if (!name.endsWith(".whl")) return false
+    const platformTag = name.slice(0, -4).split("-").pop() || ""
+    if (platformTag === "any") return false
+    return !want.test(platformTag)
+  })
 }
 
 function stageWheels(target, outDir) {
@@ -230,6 +329,16 @@ function stageWheels(target, outDir) {
   // "download published wheels" and never compile.
   run("uv", ["export", "--frozen", "--no-emit-project", "-o", "requirements-payload.txt"], { cwd: REPO_ROOT })
   run("uvx", ["pip", ...wheelDownloadArgs({ wheelsDir })], { cwd: REPO_ROOT })
+
+  const bad = wrongArchWheels(fs.readdirSync(wheelsDir), target)
+  if (bad.length > 0) {
+    throw new Error(
+      `wheels: ${bad.length} wheel(s) carry a platform tag for another ` +
+        `target than ${target.key}:\n  ${bad.join("\n  ")}\n` +
+        `The pip that filled this wheelhouse resolves tags for its OWN ` +
+        `interpreter — build on a native runner.`
+    )
+  }
 }
 
 function stageNode(target, outDir) {
@@ -240,6 +349,23 @@ function stageNode(target, outDir) {
     throw new Error("HERMES_PAYLOAD_NODE_DIST must point at the extracted node dist for the target")
   }
   fs.cpSync(src, nodeDir, { recursive: true })
+
+  // The dist must be FOR the target. Running the staged node is not a
+  // valid probe here: a wrong-arch binary can still run through the
+  // build host's emulation. `node -p process.arch` names the arch the
+  // binary was BUILT for, so execute it only to read that value; when
+  // the binary cannot run at all, that is the same wrong-arch verdict.
+  const nodeBinary = target.platform === "win32" ? path.join(nodeDir, "node.exe") : path.join(nodeDir, "bin", "node")
+  let reportedArch = null
+  try {
+    reportedArch = execSync(`${JSON.stringify(nodeBinary)} -p process.arch`, { encoding: "utf8" }).trim()
+  } catch {
+    // Unrunnable on this host — for example an arm64 dist on an x64
+    // builder with no emulation. That is not proof of a wrong payload,
+    // but it IS unverifiable; refuse rather than ship unchecked.
+    throw new Error(`node: staged binary at ${nodeBinary} did not run, so its architecture is unverified`)
+  }
+  assertBanner("node", reportedArch, bannerExpectations(target).node)
 }
 
 function stageJsPrebuilt(outDir) {

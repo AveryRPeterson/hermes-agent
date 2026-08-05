@@ -72,6 +72,22 @@ if (!/^v\d+\.\d+\.\d+$/.test(tag)) {
   fail(`'${tag}' is not a final release tag (vX.Y.Z)`)
 }
 
+// The canonical Hermes version is owned by pyproject.toml (the same rule
+// the Nix derivation applies). electron-builder gets it via extraMetadata,
+// so app.getVersion(), the artifact names, and the latest*.yml feed all
+// carry the real release version instead of the UI manifest's stale one.
+// The tag must agree with it: a v0.21.0 payload inside an app that
+// announces 0.20.0 would make electron-updater blind to the mismatch.
+const pyprojectVersion = fs
+  .readFileSync(path.join(REPO_ROOT, "pyproject.toml"), "utf8")
+  .match(/^version\s*=\s*"([^"]+)"/m)?.[1]
+if (!pyprojectVersion) {
+  fail("could not read version from pyproject.toml")
+}
+if (tag !== `v${pyprojectVersion}`) {
+  fail(`tag ${tag} does not match pyproject.toml version ${pyprojectVersion}`)
+}
+
 const targets = { linux: "--linux AppImage", darwin: "--mac dmg zip", win32: "--win nsis" }[process.platform]
 if (!targets) {
   fail(`unsupported platform: ${process.platform}`)
@@ -140,7 +156,16 @@ run("npm", ["run", "build"], { cwd: desktop, env })
 if (skipPackage) {
   console.log("[build-bundled] --no-package: stopping after payload staging")
 } else {
-  run("npm", ["run", "builder", "--", ...targets.split(" "), ...extraBuilderArgs], { cwd: desktop, env })
+  run(
+    "npm",
+    [
+      "run", "builder", "--",
+      ...targets.split(" "),
+      `-c.extraMetadata.version=${pyprojectVersion}`,
+      ...extraBuilderArgs,
+    ],
+    { cwd: desktop, env }
+  )
   console.log(`[build-bundled] artifacts: ${path.join(desktop, "release")}`)
 }
 

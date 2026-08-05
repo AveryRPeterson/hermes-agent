@@ -2,12 +2,15 @@ import assert from 'node:assert/strict'
 import { test } from 'vitest'
 
 import {
-  PAYLOAD_ITEMS,
+  assertBanner,
+  bannerExpectations,
   buildManifest,
   parseSkips,
+  PAYLOAD_ITEMS,
   resolveTag,
   resolveTargets,
-  wheelDownloadArgs
+  wheelDownloadArgs,
+  wrongArchWheels
 } from '../scripts/stage-agent-payloads.mjs'
 
 // ─── resolveTargets ────────────────────────────────────────────────
@@ -99,4 +102,46 @@ test('manifest records staged vs explicitly-skipped vs failed per item', () => {
   assert.equal(manifest.items.wheels.reason, 'explicit-skip')
   // node was not staged and not explicitly skipped, so its status is failed.
   assert.equal(manifest.items.node.reason, 'failed')
+})
+
+// ─── arch guards ────────────────────────────────────────────────────
+
+test('assertBanner passes on a matching triple and throws on a foreign one', () => {
+  const target = resolveTargets('win32', 'arm64')
+  const expect = bannerExpectations(target)
+
+  assert.doesNotThrow(() =>
+    assertBanner('uv', 'uv 0.12.1 (329541a50 aarch64-pc-windows-msvc)', expect.uv)
+  )
+  // The exact failure from the first Windows test build: an x64 uv from
+  // PATH staged into an arm64 artifact (it ran via emulation).
+  assert.throws(
+    () => assertBanner('uv', 'uv 0.12.1 (329541a50 x86_64-pc-windows-msvc)', expect.uv),
+    /wrong-architecture/
+  )
+})
+
+test('wheel arch check flags foreign tags and accepts pure + native wheels', () => {
+  const win64 = resolveTargets('win32', 'x64')
+  const names = [
+    'charset_normalizer-3.4.0-cp311-cp311-win_amd64.whl',
+    'requests-2.32.3-py3-none-any.whl',
+    'pydantic_core-2.27.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl',
+    'requirements-payload.txt'
+  ]
+
+  assert.deepEqual(wrongArchWheels(names, win64), [
+    'pydantic_core-2.27.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl'
+  ])
+
+  // macOS universal2 satisfies both mac targets.
+  const macArm = resolveTargets('darwin', 'arm64')
+  assert.deepEqual(wrongArchWheels(['x-1.0-cp311-cp311-macosx_11_0_universal2.whl'], macArm), [])
+})
+
+test('banner expectations name the target, not the build host', () => {
+  const linuxArm = resolveTargets('linux', 'arm64')
+  assert.equal(bannerExpectations(linuxArm).uv, 'aarch64-unknown-linux-gnu')
+  assert.equal(bannerExpectations(linuxArm).node, 'arm64')
+  assert.ok(bannerExpectations(linuxArm).pythonAny.includes('aarch64'))
 })
