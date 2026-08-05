@@ -53,9 +53,9 @@ def test_lazy_installable_extras_excluded_from_all():
     inherit whatever's broken upstream.
 
     If you're tempted to add an opt-in backend to [all] for "convenience," map
-    it in ``LAZY_FEATURES`` instead so it installs at first use.
+    it in ``LAZY_DEPS`` instead so it installs at first use.
 
-    This test READS the set of lazy extras from ``LAZY_FEATURES``. Do not
+    This test READS the set of lazy extras from ``LAZY_DEPS``. Do not
     write that set out again here. A list written by hand needs its own
     update each time the map changes, so a new backend can enter both the
     map and [all] and this test still passes. ``[acp]`` and ``[google]``
@@ -66,7 +66,7 @@ def test_lazy_installable_extras_excluded_from_all():
     "skill deps that dev environments need". Those are enumerated here with a
     reason each; anything else overlapping is a bug.
     """
-    from tools.lazy_deps import LAZY_FEATURES
+    from tools.lazy_deps import LAZY_DEPS
 
     optional_dependencies = _load_optional_dependencies()
 
@@ -83,7 +83,7 @@ def test_lazy_installable_extras_excluded_from_all():
         "youtube": "skill dep dev environments need",
     }
 
-    lazy_covered_extras = set(LAZY_FEATURES.values()) - set(intentional_overlap)
+    lazy_covered_extras = set(LAZY_DEPS.values()) - set(intentional_overlap)
     all_extra_specs = optional_dependencies["all"]
     for extra in sorted(lazy_covered_extras):
         offending = [
@@ -126,7 +126,7 @@ def test_pyproject_pins_match_lazy_deps_pins():
     resolver (bad composition, a dropped marker, a stale cache) would silently
     reintroduce the same class of failure.
     """
-    from tools.lazy_deps import LAZY_FEATURES, feature_specs
+    from tools.lazy_deps import LAZY_DEPS, feature_specs
 
     optional_dependencies = _load_optional_dependencies()
 
@@ -136,7 +136,7 @@ def test_pyproject_pins_match_lazy_deps_pins():
             pyproject_pins.setdefault(package, set()).add(version)
 
     lazy_pins: dict[str, set[str]] = {}
-    for feature in LAZY_FEATURES:
+    for feature in LAZY_DEPS:
         for package, version in _exact_pins(feature_specs(feature)).items():
             lazy_pins.setdefault(package, set()).add(version)
 
@@ -213,11 +213,11 @@ def test_every_lazy_deps_exact_pin_matches_uv_lock():
     locked version. When bumping a pin, regenerate the lock in the same
     commit (`uv lock --upgrade-package <name>`), and vice versa.
     """
-    from tools.lazy_deps import LAZY_FEATURES, feature_specs
+    from tools.lazy_deps import LAZY_DEPS, feature_specs
 
     drift = {}
     seen = set()
-    for feature in LAZY_FEATURES:
+    for feature in LAZY_DEPS:
         for package, pin in _exact_pins(feature_specs(feature)).items():
             if (package, pin) in seen:
                 continue

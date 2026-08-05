@@ -227,7 +227,7 @@ def _lazy_deps_pinned_specs():
     code path users actually hit.
     """
     specs: list[str] = []
-    for feature in lazy_deps.LAZY_FEATURES:
+    for feature in lazy_deps.LAZY_DEPS:
         specs.extend(lazy_deps.feature_specs(feature))
     assert specs, "no lazy feature resolved any specs"
     return specs
@@ -253,7 +253,7 @@ def _lazy_deps_by_feature():
     """``{feature_name: [spec, ...]}`` as the installer resolves it."""
     by_feature = {
         feature: list(lazy_deps.feature_specs(feature))
-        for feature in lazy_deps.LAZY_FEATURES
+        for feature in lazy_deps.LAZY_DEPS
     }
     assert by_feature, "no lazy features are registered"
     return by_feature

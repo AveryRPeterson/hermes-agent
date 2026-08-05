@@ -41,7 +41,7 @@ Security model:
 * **PyPI by package name only.** Specs may be ``"package>=1.0,<2"`` etc.
   We do NOT support ``--index-url`` overrides, ``git+https://``, file:
   paths, or any other input that could be hijacked by a malicious config.
-* **Allowlist.** Only specs that appear in :data:`LAZY_FEATURES` can be
+* **Allowlist.** Only specs that appear in :data:`LAZY_DEPS` can be
   installed via this path. A typo in feature name doesn't get the user
   install-anything semantics.
 * **Opt-out.** Setting ``security.allow_lazy_installs: false`` in
@@ -56,7 +56,7 @@ Security model:
 Adding a new backend:
 
 1. Add the packages as an extra in pyproject.toml, then map the feature
-   to that extra in :data:`LAZY_FEATURES`.
+   to that extra in :data:`LAZY_DEPS`.
 2. At the top of the backend module's import path, call
    ``ensure("feature.name")`` inside a try/except that converts
    :class:`FeatureUnavailable` to a useful runtime error.
@@ -96,7 +96,7 @@ logger = logging.getLogger(__name__)
 # =============================================================================
 
 
-LAZY_FEATURES: dict[str, str] = {
+LAZY_DEPS: dict[str, str] = {
     # ─── Inference providers ───────────────────────────────────────────────
     "provider.anthropic": "anthropic",
     "provider.bedrock": "bedrock",
@@ -263,9 +263,9 @@ def extra_specs(extra: str, _seen: Optional[frozenset] = None) -> tuple[str, ...
 
 def feature_extra(feature: str) -> str:
     """Return the pyproject extra backing ``feature``, or raise KeyError."""
-    if feature not in LAZY_FEATURES:
+    if feature not in LAZY_DEPS:
         raise KeyError(f"Unknown lazy feature: {feature!r}")
-    return LAZY_FEATURES[feature]
+    return LAZY_DEPS[feature]
 
 
 # Conservative regex for spec validation — package name plus optional
@@ -633,7 +633,7 @@ def _is_satisfied(spec: str) -> bool:
     Checks both presence AND version. If the package is installed at a
     version outside the spec's range, returns False so the caller will
     upgrade/downgrade to the pinned version. This is what makes
-    ``hermes update`` propagate pin bumps in :data:`LAZY_FEATURES` to already-
+    ``hermes update`` propagate pin bumps in :data:`LAZY_DEPS` to already-
     installed backends instead of silently leaving stale versions in place.
 
     If ``packaging`` is unavailable for any reason (it's a transitive of
@@ -1096,9 +1096,9 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     batch) get prompt=False and skip the confirmation — config flag is
     the gate in that case.
     """
-    if feature not in LAZY_FEATURES:
+    if feature not in LAZY_DEPS:
         raise FeatureUnavailable(
-            feature, (), f"feature {feature!r} not in LAZY_FEATURES allowlist"
+            feature, (), f"feature {feature!r} not in LAZY_DEPS allowlist"
         )
 
     missing = feature_missing(feature)
@@ -1130,14 +1130,14 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
                 # Prefix "unsupported " on purpose: refresh_active_features
                 # reads that prefix to tell a skip from a hard failure.
                 "unsupported on a managed install: "
-                + _managed_install_reason(feature, LAZY_FEATURES.get(feature)),
+                + _managed_install_reason(feature, LAZY_DEPS.get(feature)),
                 # The store is read-only. A `uv pip install` hint here
                 # fails with EROFS.
                 actionable=False,
             )
 
     # Validate every spec against the allowlist + safety regex. Belt and
-    # braces — the keys-in-LAZY_FEATURES check above already constrains this.
+    # braces — the keys-in-LAZY_DEPS check above already constrains this.
     for spec in missing:
         if not _spec_is_safe(spec):
             raise FeatureUnavailable(
@@ -1227,14 +1227,14 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
 
 def is_available(feature: str) -> bool:
     """Return True if the feature's deps are already satisfied."""
-    if feature not in LAZY_FEATURES:
+    if feature not in LAZY_DEPS:
         return False
     return not feature_missing(feature)
 
 
 def feature_install_command(feature: str) -> Optional[str]:
     """Return the ``pip install`` command a user could run manually, or None."""
-    if feature not in LAZY_FEATURES:
+    if feature not in LAZY_DEPS:
         return None
     specs = feature_specs(feature)
     return "uv pip install " + " ".join(repr(s) for s in specs)
@@ -1263,7 +1263,7 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
 
     This is the environment-aware install path for callers whose package
     lists come from data (e.g. memory-provider plugin manifests declaring
-    ``pip_dependencies``) rather than the static :data:`LAZY_FEATURES` allowlist.
+    ``pip_dependencies``) rather than the static :data:`LAZY_DEPS` allowlist.
     It applies the exact same environment routing as :func:`ensure`:
 
     * **Venv-scoped by default** — installs into ``sys.executable``'s venv.
@@ -1345,10 +1345,10 @@ def active_features() -> list[str]:
     Features the user has never enabled stay quiet.
 
     Used by ``hermes update`` to figure out which lazy backends need a
-    refresh pass when pins move in :data:`LAZY_FEATURES`.
+    refresh pass when pins move in :data:`LAZY_DEPS`.
     """
     active = []
-    for feature in LAZY_FEATURES:
+    for feature in LAZY_DEPS:
         try:
             specs = feature_specs(feature)
         except FeatureUnavailable:

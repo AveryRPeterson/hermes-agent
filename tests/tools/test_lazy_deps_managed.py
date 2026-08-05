@@ -72,7 +72,7 @@ def test_nix_names_the_extra_and_both_ways_to_set_the_option(monkeypatch):
         lazy_deps.ensure(FEATURE, prompt=False)
 
     message = str(excinfo.value)
-    assert f'"{lazy_deps.LAZY_FEATURES[FEATURE]}"' in message, (
+    assert f'"{lazy_deps.LAZY_DEPS[FEATURE]}"' in message, (
         "the message must name the extra to add, not just the feature"
     )
     assert "services.hermes-agent.extraDependencyGroups" in message

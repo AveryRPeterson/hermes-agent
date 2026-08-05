@@ -3,7 +3,7 @@ their SDKs like honcho/hindsight.
 
 Both providers ship a third-party SDK (``supermemory`` / ``mem0ai``) that is
 NOT a core dependency. Before this fix they imported the SDK directly with no
-``tools.lazy_deps.ensure()`` preflight and had no ``LAZY_FEATURES`` allowlist
+``tools.lazy_deps.ensure()`` preflight and had no ``LAZY_DEPS`` allowlist
 entry. On the published Docker image the agent venv is sealed
 (``HERMES_DISABLE_LAZY_INSTALLS=1``) and lazy installs are redirected to a
 writable durable target (``HERMES_LAZY_INSTALL_TARGET``). honcho/hindsight
@@ -13,7 +13,7 @@ the provider silently reported itself unavailable.
 
 These tests pin the contract:
 
-1. Both features are in the ``LAZY_FEATURES`` allowlist (without an entry,
+1. Both features are in the ``LAZY_DEPS`` allowlist (without an entry,
    ``ensure()`` raises ``FeatureUnavailable`` — the original silent-dark bug).
 2. Each provider's SDK-import chokepoint actually calls ``ensure(<feature>)``.
 3. supermemory's ``is_available()`` no longer gates on the SDK being
@@ -48,10 +48,10 @@ class TestAllowlistEntries:
     @pytest.mark.parametrize("feature", MEMORY_FEATURES)
     def test_feature_is_allowlisted(self, feature):
         # Without an allowlist entry, ensure() raises FeatureUnavailable with
-        # "not in LAZY_FEATURES" — which is exactly why the SDK never installed on
+        # "not in LAZY_DEPS" — which is exactly why the SDK never installed on
         # a hosted instance before this fix.
-        assert feature in ld.LAZY_FEATURES, (
-            f"{feature!r} missing from LAZY_FEATURES — its SDK can never "
+        assert feature in ld.LAZY_DEPS, (
+            f"{feature!r} missing from LAZY_DEPS — its SDK can never "
             f"lazy-install on a sealed Docker venv."
         )
 
@@ -68,9 +68,9 @@ class TestAllowlistEntries:
     @pytest.mark.parametrize("feature", MEMORY_FEATURES)
     def test_unknown_feature_would_raise_without_entry(self, feature, monkeypatch):
         # Demonstrate the failure mode the allowlist entry prevents: a feature
-        # NOT in LAZY_FEATURES raises rather than installing.
+        # NOT in LAZY_DEPS raises rather than installing.
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
-        with pytest.raises(ld.FeatureUnavailable, match="not in LAZY_FEATURES"):
+        with pytest.raises(ld.FeatureUnavailable, match="not in LAZY_DEPS"):
             ld.ensure(feature + ".typo", prompt=False)
 
 

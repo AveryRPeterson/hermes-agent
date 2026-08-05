@@ -39,7 +39,7 @@ class TestFeatureExtraMapping:
     def test_every_feature_maps_to_a_declared_extra(self):
         missing = {
             feature: extra
-            for feature, extra in ld.LAZY_FEATURES.items()
+            for feature, extra in ld.LAZY_DEPS.items()
             if extra not in _extras()
         }
         assert not missing, (
@@ -51,7 +51,7 @@ class TestFeatureExtraMapping:
         """A feature resolving to nothing would 'install' silently and then
         fail on import — the exact failure the mapping is meant to prevent."""
         empty = []
-        for feature in ld.LAZY_FEATURES:
+        for feature in ld.LAZY_DEPS:
             try:
                 if not ld.feature_specs(feature):
                     empty.append(feature)
@@ -63,7 +63,7 @@ class TestFeatureExtraMapping:
         """Composition rewrites markers, so the output must still be PEP 508."""
         packaging = pytest.importorskip("packaging.requirements")
         bad = []
-        for feature in ld.LAZY_FEATURES:
+        for feature in ld.LAZY_DEPS:
             for spec in ld.feature_specs(feature):
                 try:
                     packaging.Requirement(spec)
@@ -78,7 +78,7 @@ class TestFeatureExtraMapping:
         the installer.
         """
         unsafe = []
-        for feature in ld.LAZY_FEATURES:
+        for feature in ld.LAZY_DEPS:
             for spec in ld.feature_specs(feature):
                 head = spec.split(";", 1)[0].strip()
                 if not ld._SAFE_SPEC.match(head):
@@ -97,7 +97,7 @@ class TestFeatureExtraMapping:
             for d in _pyproject()["project"]["dependencies"]
         }
         redundant = []
-        for feature in ld.LAZY_FEATURES:
+        for feature in ld.LAZY_DEPS:
             names = {_canonical_name(s) for s in ld.feature_specs(feature)}
             if names and names <= core:
                 redundant.append((feature, sorted(names)))

@@ -22,12 +22,12 @@ def _register_fake_feature(monkeypatch, feature: str, specs: tuple[str, ...]) ->
     """Register a synthetic feature + backing extra for a test.
 
     Specs live in pyproject.toml's ``[project.optional-dependencies]``, so a
-    test feature needs both halves: an entry in ``LAZY_FEATURES`` mapping it to
+    test feature needs both halves: an entry in ``LAZY_DEPS`` mapping it to
     an extra name, and that extra in the (cached) pyproject table. Returns the
     generated extra name.
     """
     extra = f"__test-{feature.replace('.', '-')}"
-    monkeypatch.setitem(ld.LAZY_FEATURES, feature, extra)
+    monkeypatch.setitem(ld.LAZY_DEPS, feature, extra)
     table = dict(ld._optional_dependencies())
     table[extra] = tuple(specs)
     monkeypatch.setattr(ld, "_optional_dependencies", lambda: table)
@@ -93,7 +93,7 @@ class TestSpecSafety:
 class TestAllowlist:
     def test_unknown_feature_raises(self, monkeypatch):
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: True)
-        with pytest.raises(ld.FeatureUnavailable, match="not in LAZY_FEATURES"):
+        with pytest.raises(ld.FeatureUnavailable, match="not in LAZY_DEPS"):
             ld.ensure("not.a.real.feature")
 
 
