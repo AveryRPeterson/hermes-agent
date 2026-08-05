@@ -73,9 +73,15 @@ import site
 import subprocess
 import sys
 import sysconfig
+import tempfile
+import tomllib
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.version import InvalidVersion, Version
 
 from hermes_cli._subprocess_compat import windows_hide_flags
 
@@ -186,21 +192,25 @@ def _project_root() -> Optional[Path]:
 
 
 @functools.lru_cache(maxsize=1)
-def _optional_dependencies() -> dict[str, tuple[str, ...]]:
-    """Parse ``[project.optional-dependencies]`` from pyproject.toml."""
+def _pyproject() -> dict:
+    """Parse pyproject.toml once, or return {} when it is not on disk.
+
+    A Nix build puts the code in site-packages with no pyproject.toml beside
+    it, so callers must handle an empty result.
+    """
     root = _project_root()
     if root is None:
         return {}
     try:
-        import tomllib
-    except ImportError:  # pragma: no cover - py<3.11, unsupported
-        return {}
-    try:
-        data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+        return tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     except Exception as e:
         logger.debug("Could not read pyproject.toml: %s", e)
         return {}
-    raw = data.get("project", {}).get("optional-dependencies", {}) or {}
+
+
+def _optional_dependencies() -> dict[str, tuple[str, ...]]:
+    """Return ``[project.optional-dependencies]``."""
+    raw = _pyproject().get("project", {}).get("optional-dependencies", {}) or {}
     return {k: tuple(v) for k, v in raw.items()}
 
 
@@ -585,71 +595,54 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     return None
 
 
+def _parse_spec(spec: str) -> Optional[Requirement]:
+    """Parse a PEP 508 spec, or return None when it is malformed.
+
+    ``packaging`` is a core dependency, so use it. A regex over a spec has
+    to re-handle the extras block, the version set and the environment
+    marker, and getting the marker wrong makes a specifier unparseable
+    ("==2.1.6; platform_system == 'Darwin'").
+    """
+    try:
+        return Requirement(spec)
+    except InvalidRequirement:
+        return None
+
+
 def _pkg_name_from_spec(spec: str) -> str:
-    """Extract the bare package name from a pip spec.
-
-    ``"slack-bolt>=1.18.0,<2"`` → ``"slack-bolt"``
-    ``"mautrix[encryption]>=0.20"`` → ``"mautrix"``
-    """
-    m = re.match(r"^([A-Za-z0-9_][A-Za-z0-9_.\-]*)", spec)
-    return m.group(1) if m else spec
-
-
-def _specifier_from_spec(spec: str) -> str:
-    """Extract just the version-specifier portion of a pip spec.
-
-    ``"honcho-ai==2.2.0"`` → ``"==2.2.0"``
-    ``"mautrix[encryption]>=0.20,<1"`` → ``">=0.20,<1"``
-    ``"package"`` → ``""`` (no version constraint)
-    """
-    # Strip the package name + optional [extras] block.
-    m = re.match(r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*(?:\[[A-Za-z0-9_,\-]+\])?", spec)
-    if not m:
-        return ""
-    return spec[m.end():]
+    """Return the bare package name, or the input when it does not parse."""
+    req = _parse_spec(spec)
+    return req.name if req else spec
 
 
 def _is_satisfied(spec: str) -> bool:
-    """Is ``spec`` already satisfied in the current env?
+    """Is ``spec`` already met in this environment?
 
-    Checks both presence AND version. If the package is installed at a
-    version outside the spec's range, returns False so the caller will
-    upgrade/downgrade to the pinned version. This is what makes
-    ``hermes update`` propagate pin bumps in :data:`LAZY_DEPS` to already-
-    installed backends instead of silently leaving stale versions in place.
+    Checks the version as well as presence. An installed version outside the
+    spec's range gives False, so the caller moves it to the pinned version.
+    This is how `hermes update` carries a pin bump to a backend that a user
+    installed at an older version.
 
-    If ``packaging`` is unavailable for any reason (it's a transitive of
-    pip so this should never happen), we fall back to a presence-only check
-    so we err on the side of "don't churn".
+    A spec that does not parse gives True, and so does a version that does
+    not parse. Neither is a reason to reinstall a working package.
     """
-    pkg = _pkg_name_from_spec(spec)
-    try:
-        from importlib.metadata import PackageNotFoundError, version
-    except ImportError:
-        return False
-    try:
-        installed = version(pkg)
-    except PackageNotFoundError:
-        return False
-    except Exception:
-        return False
-
-    spec_tail = _specifier_from_spec(spec)
-    if not spec_tail:
-        # Bare ``"package"`` — no version constraint, presence is enough.
+    req = _parse_spec(spec)
+    if req is None:
         return True
 
-    try:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
-        from packaging.version import InvalidVersion, Version
-    except ImportError:
-        # packaging unavailable — fall back to "installed counts as satisfied".
-        return True
+    from importlib.metadata import PackageNotFoundError, version
 
     try:
-        return Version(installed) in SpecifierSet(spec_tail)
-    except (InvalidSpecifier, InvalidVersion, Exception):
-        # Malformed spec or installed version we can't parse — don't churn.
+        installed = version(req.name)
+    except (PackageNotFoundError, Exception):
+        return False
+
+    if not req.specifier:
+        # No version constraint. Presence is enough.
+        return True
+    try:
+        return Version(installed) in req.specifier
+    except InvalidVersion:
         return True
 
 
@@ -740,31 +733,33 @@ def _core_constraints_file() -> Optional[Path]:
 # two years ago. A pin on both packages has no solution. Only an overrides
 # file keeps the patched version and the correct backend version together,
 # so Hermes gives the file to the uv tier below.
-_SECURITY_OVERRIDES: tuple[str, ...] = (
-    # alibabacloud-tea-openapi 0.4.5 holds cryptography<49. Version 48.0.1
-    # has GHSA-m2h6-j472-rp4c, GHSA-jwv3-5hgf-82ww and CVE-2026-69247. The
-    # limit is old, and the two packages are compatible. The package uses
-    # cryptography only to sign requests with RSA and AES. Keep this line
-    # equal to the override in [tool.uv] in pyproject.toml.
-    "cryptography>=50,<51",
-)
+@lru_cache(maxsize=1)
+def _security_overrides() -> tuple[str, ...]:
+    """Return ``[tool.uv] override-dependencies`` from pyproject.toml.
+
+    Read the list, instead of duplicating, to avoid drift.
+    """
+    raw = (
+        _pyproject().get("tool", {}).get("uv", {}).get("override-dependencies", [])
+        or []
+    )
+    return tuple(str(s) for s in raw)
 
 
 def _security_overrides_file() -> Optional[Path]:
-    """Write ``_SECURITY_OVERRIDES`` to a temporary file for ``--overrides``.
+    """Write the overrides to a temporary file for ``--overrides``.
 
-    Returns the path to the file. Returns None if Hermes cannot write the
-    file. The caller then installs without the overrides, and the downgrade
-    that this function prevents becomes possible again.
+    Returns the path, or None when Hermes cannot write the file. The caller
+    then installs without the overrides, and the downgrade that these
+    prevent becomes possible again.
     """
-    if not _SECURITY_OVERRIDES:
+    overrides = _security_overrides()
+    if not overrides:
         return None
     try:
-        import tempfile
-
         fd, path = tempfile.mkstemp(prefix="hermes-lazy-overrides-", suffix=".txt")
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(_SECURITY_OVERRIDES) + "\n")
+            f.write("\n".join(overrides) + "\n")
         return Path(path)
     except Exception as e:
         logger.debug("Could not build security overrides file: %s", e)
@@ -777,7 +772,7 @@ def _pip_reassert_overrides(
     *,
     timeout: int,
 ):
-    """Install ``_SECURITY_OVERRIDES`` again with ``--no-deps`` after pip runs.
+    """Install the overrides again with ``--no-deps`` after pip runs.
 
     pip has no ``--overrides`` option. A ``--constraint`` file does keep the
     pinned package, but pip then moves the backend back instead
@@ -790,11 +785,12 @@ def _pip_reassert_overrides(
     then keeps its own result. This function reports a failure, because a
     downgraded security package is the fault that it must prevent.
     """
-    if not _SECURITY_OVERRIDES:
+    overrides = _security_overrides()
+    if not overrides:
         return None
     try:
         r = subprocess.run(
-            pip_cmd + ["install", "--no-deps", *target_args, *_SECURITY_OVERRIDES],
+            pip_cmd + ["install", "--no-deps", *target_args, *overrides],
             capture_output=True, text=True, encoding='utf-8', errors='replace',
             timeout=timeout,
             stdin=subprocess.DEVNULL,
@@ -936,7 +932,7 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
     constraint_args: list[str] = []
     if constraints is not None:
         constraint_args = ["--constraint", str(constraints)]
-    # uv-only: pip has no --overrides. See _SECURITY_OVERRIDES.
+    # uv-only: pip has no --overrides. See _security_overrides().
     override_args: list[str] = []
     if overrides is not None:
         override_args = ["--overrides", str(overrides)]

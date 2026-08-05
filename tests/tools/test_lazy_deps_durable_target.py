@@ -276,7 +276,7 @@ class TestInstallArgConstruction:
 
         ld._venv_pip_install(("somepkg==1.2.3",))
         repair = [c for c in calls if "--no-deps" in c]
-        if not ld._SECURITY_OVERRIDES:
+        if not ld._security_overrides():
             pytest.skip("no security overrides configured")
         assert repair, f"no override repair pass captured: {calls}"
         assert "--target" in repair[0] and str(target) in repair[0], (
@@ -303,7 +303,7 @@ class TestInstallArgConstruction:
         assert "--target" not in cmd
         # The durable-target mode's core-constraints file must be absent. The
         # pip tier does still carry a --constraint holding the security floor
-        # (see tools/lazy_deps._SECURITY_OVERRIDES), so assert on the file's
+        # (see tools/lazy_deps._security_overrides), so assert on the file's
         # role rather than on the flag's mere presence.
         constraint_paths = [
             Path(cmd[i + 1])
