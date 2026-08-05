@@ -299,6 +299,7 @@ function stageUvAndPython(target, outDir) {
   if (!expect.pythonAny.some((word) => pythonBanner.includes(word))) {
     assertBanner("python", pythonBanner, expect.pythonAny.join("|"))
   }
+  return pythonBinary
 }
 
 /**
@@ -369,14 +370,23 @@ export function wrongArchWheels(fileNames, target) {
   })
 }
 
-function stageWheels(target, outDir) {
+function stageWheels(target, outDir, pythonBinary) {
   const wheelsDir = path.join(outDir, "wheels")
+  fs.rmSync(wheelsDir, { recursive: true, force: true })
   fs.mkdirSync(wheelsDir, { recursive: true })
-  // Export the lock to a requirements file. Then fetch wheels natively
-  // through uvx pip, so no host pip is necessary. --only-binary means
-  // "download published wheels" and never compile.
+  // Export the lock to a requirements file. Then fetch wheels with pip
+  // running ON THE STAGED PAYLOAD INTERPRETER: pip resolves platform
+  // tags for the interpreter that executes it, so this is what pins the
+  // wheelhouse to the target architecture. (uvx pip runs under uvx's
+  // own python — on the arm64 test box that pulled win_amd64 wheels.)
+  // --only-binary means "download published wheels" and never compile.
+  if (!pythonBinary) {
+    throw new Error("wheels: the uv/python stage must run first (it provides the payload interpreter)")
+  }
   run("uv", ["export", "--frozen", "--no-emit-project", "-o", "requirements-payload.txt"], { cwd: REPO_ROOT })
-  run("uvx", ["pip", ...wheelDownloadArgs({ wheelsDir })], { cwd: REPO_ROOT })
+  // `uv pip wheel` does not exist; uvx runs the real pip, and --python
+  // makes uvx build pip's environment on the staged interpreter.
+  run("uvx", ["--python", pythonBinary, "pip", ...wheelDownloadArgs({ wheelsDir })], { cwd: REPO_ROOT })
 
   const bad = wrongArchWheels(fs.readdirSync(wheelsDir), target)
   if (bad.length > 0) {
@@ -463,14 +473,17 @@ function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true })
   const staged = []
   let commit = null
+  let payloadPython = null
 
   const steps = {
     repo: () => {
       commit = stageRepo(tag, OUT_DIR)
     },
-    uv: () => stageUvAndPython(target, OUT_DIR),
+    uv: () => {
+      payloadPython = stageUvAndPython(target, OUT_DIR)
+    },
     python: () => {}, // The uv step stages python too (one uv invocation).
-    wheels: () => stageWheels(target, OUT_DIR),
+    wheels: () => stageWheels(target, OUT_DIR, payloadPython),
     node: () => stageNode(target, OUT_DIR),
     "js-prebuilt": () => stageJsPrebuilt(OUT_DIR),
   }
