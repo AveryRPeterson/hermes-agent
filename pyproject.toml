@@ -22,10 +22,10 @@ dependencies = [
   # at any time without a code review on our side. Exact pins mean the
   # only way a new package version reaches a user is via an intentional
   # update on our end (bump the pin in this file, regenerate uv.lock).
-  # This was tightened on 2026-05-12 in response to the Mini Shai-Hulud
-  # worm hitting mistralai 2.4.6 on PyPI; if that release had been
-  # captured by `mistralai>=2.3.0,<3` rather than an exact pin, every
-  # install in the hours before the quarantine would have pulled it.
+  # The Mini Shai-Hulud worm shows why. It reached mistralai 2.4.6 on
+  # PyPI. A range such as `mistralai>=2.3.0,<3` accepts that release, so
+  # each install in the hours before the quarantine would have taken it.
+  # An exact pin does not.
   #
   # When updating: bump the version below AND regenerate uv.lock with
   # `uv lock` so the transitive resolution stays consistent. Don't
@@ -82,14 +82,17 @@ dependencies = [
   # urllib3 2.7.0 fixes GHSA-mf9v-mfxr-j63j (decompression-bomb bypass)
   # and GHSA-qccp-gfcp-xxvc (header leak across origins).
   "urllib3>=2.7.0,<3",
-  # cryptography is pulled in transitively by PyJWT[crypto]; pin it explicitly
-  # so the WeCom/Weixin crypto paths can't drift below the CVE-fixed floor.
-  # 50.0.0 fixes CVE-2026-69247 (GHSA-g6cj-pr64-35w5 — PKCS#7 EnvelopedData
-  # Bleichenbacher oracle); 49.0.0 fixed GHSA-m2h6-j472-rp4c (wildcard DNS
-  # names escaping permittedSubtrees) and GHSA-jwv3-5hgf-82ww (exponential
-  # path-building on duplicate self-signed intermediates). See the
-  # cryptography override in [tool.uv]: alibabacloud-tea-openapi 0.4.5 still
-  # caps <49 and has no release that lifts it.
+  # PyJWT[crypto] pulls cryptography in transitively. Pin it here as well, so
+  # that the WeCom and Weixin crypto paths cannot fall below the patched
+  # version. 50.0.0 is the floor: it fixes CVE-2026-69247, a Bleichenbacher
+  # oracle in PKCS#7 EnvelopedData, and 49.0.0 fixed GHSA-m2h6-j472-rp4c,
+  # where a wildcard DNS name escapes permittedSubtrees, and
+  # GHSA-jwv3-5hgf-82ww, exponential path-building on duplicate self-signed
+  # intermediates.
+  #
+  # A pin here is not sufficient on its own. alibabacloud-tea-openapi caps
+  # cryptography<49, so [tool.uv] also holds an override. Read that comment
+  # before you move this version.
   "cryptography==50.0.0",  # CVE-2026-69247, GHSA-m2h6-j472-rp4c, GHSA-jwv3-5hgf-82ww, CVE-2026-39892, CVE-2026-34073, GHSA-537c-gmf6-5ccf
   # Windows has no IANA tzdata shipped with the OS, so Python's ``zoneinfo``
   # (PEP 615) raises ``ZoneInfoNotFoundError`` for every non-UTC timezone
@@ -179,14 +182,13 @@ bedrock = ["boto3==1.42.89"]
 # version as [google], because google-auth permits older versions with
 # known faults.
 vertex = ["google-auth==2.55.1", "pyasn1==0.6.4"]
-# mistral: Voxtral STT + TTS. Pinned to an exact verified-clean version.
-# The `mistralai` PyPI project was quarantined 2026-05-12 after the malicious
-# 2.4.6 release (Mini Shai-Hulud worm); 2.4.6 was removed from PyPI and the
-# project is serving clean releases again (2.4.7 2026-05-25, 2.4.8 2026-05-28).
-# Like other opt-in TTS/STT backends, this is lazy-installed via
-# tools/lazy_deps.py (stt.mistral / tts.mistral) at first use — deliberately
-# NOT re-added to [all] so a future quarantined release can't break fresh
-# installs (see [all] policy comment below).
+# Voxtral STT and TTS. The `mistralai` project on PyPI carried a malicious
+# release once (the Mini Shai-Hulud worm), so this pin must stay exact and
+# must name a version that someone checked.
+#
+# It installs at first use, through tools/lazy_deps.py (stt.mistral and
+# tts.mistral). Keep it out of [all]: a quarantined release must not stop a
+# fresh install.
 mistral = ["mistralai==2.4.8"]
 azure-identity = ["azure-identity==1.25.3"]
 
@@ -434,28 +436,22 @@ termux-all = [
   "hermes-agent[web]",
 ]
 all = [
-  # Policy (2026-05-12): `[all]` includes only extras that genuinely
-  # CAN'T be lazy-installed via `tools/lazy_deps.py` — i.e. things every
-  # session can use, things needed before the agent loop is alive
-  # (terminal/CLI), and skill deps that dev environments need.
-  # Anything an opt-in backend (provider, search, TTS, image, memory,
-  # messaging platform, terminal sandbox) needs MUST stay out of this list
-  # and install at first use, through a `LAZY_DEPS` entry in
-  # tools/lazy_deps.py. One quarantined PyPI release must not stop each
-  # fresh install.
+  # [all] holds only the extras that CANNOT install at first use: what
+  # each session can use, what must exist before the agent loop starts
+  # (terminal, CLI), and the skill dependencies that a dev environment
+  # needs.
   #
-  # Removed from [all] on 2026-05-12 (covered by lazy-install):
-  #   anthropic, exa, firecrawl, parallel-web, fal, edge-tts,
-  #   modal, daytona, vercel, messaging (telegram/discord/slack),
-  #   matrix, slack, honcho, voice (faster-whisper),
-  #   dingtalk, feishu, bedrock, tts-premium (elevenlabs)
+  # An opt-in backend — provider, search, TTS, image, memory, messaging
+  # platform, terminal sandbox — MUST stay out of this list and get a
+  # `LAZY_DEPS` entry in tools/lazy_deps.py instead. One quarantined PyPI
+  # release must not stop each fresh install.
   #
-  # Why: the matrix extra in particular pulls `mautrix[encryption]`
-  # which depends on `python-olm`. python-olm has Linux-only wheels and
-  # no native build path on Windows or modern macOS. With matrix in
-  # [all], `uv sync --locked` on Windows tried to build it from sdist
-  # and failed on `make`. Lazy-install routes that build to first use,
-  # where the user is expected to have a toolchain available.
+  # [matrix] shows the second reason to keep this list small. It pulls
+  # `mautrix[encryption]`, which needs `python-olm`. python-olm has wheels
+  # for Linux only and no build path on Windows or on current macOS, so
+  # with [matrix] here `uv sync --locked` on Windows built it from an sdist
+  # and failed on `make`. An install at first use moves that build to a
+  # point where the user can have a toolchain.
   "hermes-agent[cli]",
   "hermes-agent[mcp]",
   "hermes-agent[homeassistant]",
@@ -490,17 +486,18 @@ override-dependencies = [
   # so, we force-override this to pynacl 1.6. here.
   # remove this when we update discord.py
   "pynacl>=1.6,<1.7",
-  # alibabacloud-tea-openapi 0.4.5 (latest, 2026-07-14) caps cryptography<49,
-  # which would strand us on 48.0.1 and its three open advisories (see the
-  # cryptography pin in [project].dependencies). It uses cryptography only for
-  # RSA/AES request signing, which did not change incompatibly in 49/50, so
-  # force the patched version. Remove this when alibabacloud-tea-openapi
-  # publishes a release that lifts the cap.
+  # alibabacloud-tea-openapi caps cryptography<49, and its latest release
+  # still does. Without this override, that cap holds cryptography at 48.0.1
+  # and its three advisories (see the cryptography pin in
+  # [project].dependencies). The package uses cryptography only to sign
+  # requests with RSA and AES, and that API did not break in 49 or 50.
+  # Remove this line when alibabacloud-tea-openapi lifts the cap.
   "cryptography>=50,<51",
 ]
 exclude-newer = "14 days"
-# cryptography 50.0.0 (2026-07-31) is inside the 14-day quarantine window but
-# carries the CVE-2026-69247 fix, so it is exempted.
+# Each package listed as `false` is exempt from the quarantine window above.
+# cryptography is exempt because 50.0.0 carries the CVE-2026-69247 fix, and
+# waiting 14 days for it would leave the advisory open.
 exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, aiohttp = false, cryptography = false }
 
 [tool.setuptools]
