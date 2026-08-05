@@ -46,6 +46,12 @@ export const PAYLOAD_ITEMS = ["repo", "uv", "python", "wheels", "node", "js-preb
  * Map (process.platform, process.arch) → the uv / python-build-standalone /
  * node target descriptors. One artifact per (os, arch); mac universal2 is
  * deliberately NOT a target — we ship two artifacts (plan §6).
+ *
+ * No cross-platform wheel tags here on purpose: payloads are assembled on a
+ * per-(os, arch) CI runner (electron-builder needs per-OS runners for
+ * signing anyway), so wheels are fetched NATIVELY with
+ * `uvx pip wheel --only-binary=:all:` — the runner's own platform is the
+ * target platform.
  */
 export function resolveTargets(platform = process.platform, arch = process.arch) {
   const table = {
@@ -89,19 +95,19 @@ export function resolveTargets(platform = process.platform, arch = process.arch)
 }
 
 /**
- * Build the `uv sync`-compatible wheel download invocation. Exported pure so
- * tests can assert we always pass --frozen (lockfile is law) and the foreign
- * platform/python pins that make one CI host able to assemble every target.
+ * Build the `pip wheel` argument list (invoked via `uvx pip …` so no host
+ * pip install is needed). Runs NATIVELY on the target runner: with
+ * --only-binary=:all: it downloads prebuilt wheels for this platform and
+ * never compiles (an sdist in the payload would try to build at first
+ * launch — offline, no toolchain — so sdists are refused outright).
+ * Consumption is `uv sync --frozen --offline --no-index --find-links`.
  */
-export function wheelDownloadArgs(target, { wheelsDir, pythonVersion }) {
+export function wheelDownloadArgs({ wheelsDir }) {
   return [
-    "pip",
-    "download",
-    "--dest", wheelsDir,
-    "--python-platform", target.pythonPlatform,
-    "--python-version", pythonVersion,
+    "wheel",
     "--only-binary", ":all:",
     "-r", "requirements-payload.txt",
+    "-w", wheelsDir,
   ]
 }
 
@@ -199,30 +205,27 @@ function stageUvAndPython(target, outDir) {
   const pythonDir = path.join(outDir, "python")
   fs.mkdirSync(uvDir, { recursive: true })
   fs.mkdirSync(pythonDir, { recursive: true })
-  // Reuse the repo-managed uv acquisition (hermes_cli/managed_uv.py owns
-  // version pinning) via its CLI shim; CI provides HERMES_PAYLOAD_UV to
-  // point at a pre-downloaded uv for the foreign target.
-  const uvSource = process.env.HERMES_PAYLOAD_UV
-  if (!uvSource) {
-    throw new Error("HERMES_PAYLOAD_UV must point at the uv binary for the target platform")
-  }
-  fs.copyFileSync(uvSource, path.join(uvDir, path.basename(uvSource)))
-  run("uv", ["python", "install", "--install-dir", pythonDir, process.env.HERMES_PAYLOAD_PYTHON || "3.13"])
+  // Native runner: the uv running this build IS the target-platform uv.
+  // HERMES_PAYLOAD_UV overrides for exotic setups; default is `uv` on PATH.
+  const uvName = target.platform === "win32" ? "uv.exe" : "uv"
+  const uvSource =
+    process.env.HERMES_PAYLOAD_UV ||
+    execSync(
+      target.platform === "win32" ? "where uv" : "command -v uv",
+      { encoding: "utf8" }
+    ).split(/\r?\n/)[0].trim()
+  fs.copyFileSync(uvSource, path.join(uvDir, uvName))
+  run("uv", ["python", "install", "--install-dir", pythonDir, process.env.HERMES_PAYLOAD_PYTHON || "3.11"])
 }
 
 function stageWheels(target, outDir) {
   const wheelsDir = path.join(outDir, "wheels")
   fs.mkdirSync(wheelsDir, { recursive: true })
-  // Export the lock to a requirements file, then download for the target.
+  // Export the lock to a requirements file, then fetch wheels natively via
+  // uvx pip (no host pip needed). --only-binary means "download published
+  // wheels", never compile.
   run("uv", ["export", "--frozen", "--no-emit-project", "-o", "requirements-payload.txt"], { cwd: REPO_ROOT })
-  run(
-    "uv",
-    wheelDownloadArgs(target, {
-      wheelsDir,
-      pythonVersion: process.env.HERMES_PAYLOAD_PYTHON || "3.13",
-    }),
-    { cwd: REPO_ROOT }
-  )
+  run("uvx", ["pip", ...wheelDownloadArgs({ wheelsDir })], { cwd: REPO_ROOT })
 }
 
 function stageNode(target, outDir) {

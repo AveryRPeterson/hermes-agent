@@ -42,16 +42,16 @@ test('windows targets map to msvc toolchains, darwin to apple, linux to gnu', ()
 
 // ─── wheelDownloadArgs ─────────────────────────────────────────────
 
-test('wheel download always pins the foreign platform and refuses sdists', () => {
-  const target = resolveTargets('win32', 'x64')
-  const args = wheelDownloadArgs(target, { wheelsDir: '/out/wheels', pythonVersion: '3.13' })
-  // Invariants: frozen-lockfile-derived requirements, binary-only (an sdist
-  // in the payload would try to compile at first launch — offline, no
-  // toolchain), and the target platform actually flows through.
+test('wheel fetch refuses sdists and targets the wheelhouse dir', () => {
+  const args = wheelDownloadArgs({ wheelsDir: '/out/wheels' })
+  // Invariants: frozen-lockfile-derived requirements and binary-only (an
+  // sdist in the payload would try to compile at first launch — offline,
+  // no toolchain). Native fetch: no --platform cross-tags belong here.
+  assert.equal(args[0], 'wheel')
   assert.ok(args.includes('--only-binary'))
-  assert.equal(args[args.indexOf('--python-platform') + 1], 'x86_64-pc-windows-msvc')
-  assert.equal(args[args.indexOf('--python-version') + 1], '3.13')
-  assert.equal(args[args.indexOf('--dest') + 1], '/out/wheels')
+  assert.equal(args[args.indexOf('-r') + 1], 'requirements-payload.txt')
+  assert.equal(args[args.indexOf('-w') + 1], '/out/wheels')
+  assert.ok(!args.includes('--platform'))
 })
 
 // ─── resolveTag ────────────────────────────────────────────────────
