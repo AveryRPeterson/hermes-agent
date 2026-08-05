@@ -458,6 +458,70 @@ def activate_durable_lazy_target() -> None:
         logger.debug("Failed to activate durable lazy target %s: %s", target, e)
 
 
+def _managed_install_reason(feature: str, extra: Optional[str] = None) -> str:
+    """Return the message for an install that this deployment cannot run.
+
+    Each caller reaches this when Hermes cannot install a package at run
+    time. The remedy differs by deployment, so name the deployment and give
+    the command or option that works there.
+
+    ``extra`` is the pyproject extra that holds the packages, when the
+    caller knows it. The NixOS remedy needs that name.
+    """
+    # Check the package manager first. A managed install can also carry
+    # HERMES_DISABLE_LAZY_INSTALLS, and the remedy for that user is the
+    # package manager, not a bug report about a container image.
+    #
+    # get_managed_system() returns the string "NixOS" for each Nix install.
+    # That value is an identifier, not a platform: `nix profile install` and
+    # nix-darwin give the same value on a host that does not run NixOS. The
+    # message below therefore says Nix, and gives both ways to set the
+    # option.
+    managed_by = _managed_system()
+    if managed_by == "NixOS":
+        target = f'"{extra}"' if extra else "the extra for this feature"
+        return (
+            "this build comes from Nix, and the /nix/store is read-only, so "
+            f"Hermes cannot install packages at run time. Add {target} to "
+            "extraDependencyGroups and rebuild. That option puts the extra "
+            "into the sealed venv. On NixOS, set "
+            "services.hermes-agent.extraDependencyGroups. Elsewhere, use "
+            "pkgs.hermes-agent.override { extraDependencyGroups = [ ... ]; }. "
+            "For a package that pyproject.toml does not declare, use "
+            "extraPythonPackages instead."
+        )
+    if managed_by:
+        return (
+            f"this build comes from {managed_by}, so Hermes cannot install "
+            f"packages at run time. Add the dependencies for {feature!r} "
+            f"through {managed_by}."
+        )
+
+    if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1":
+        return (
+            "runtime dependency installs are disabled in this deployment "
+            "(HERMES_DISABLE_LAZY_INSTALLS=1). The container image contains "
+            "each backend that it can run, so this is probably a bug in the "
+            "image build. Please report it. Do not install the package into "
+            "the container. /opt/hermes is read-only, and the next image "
+            "update removes the change."
+        )
+
+    return (
+        "lazy installs disabled (security.allow_lazy_installs=false)"
+    )
+
+
+def _managed_system() -> str:
+    """Return the name of the package manager that owns this install."""
+    try:
+        from hermes_cli.config import get_managed_system
+
+        return get_managed_system() or ""
+    except Exception:
+        return ""
+
+
 def _sealed_venv_reason() -> Optional[str]:
     """Return the reason that this deployment refuses installs, or None.
 
@@ -472,14 +536,7 @@ def _sealed_venv_reason() -> Optional[str]:
     """
     if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") != "1":
         return None
-    return (
-        "runtime dependency installs are disabled in this deployment "
-        "(HERMES_DISABLE_LAZY_INSTALLS=1). The container image contains "
-        "each backend that it can run. If you see this message, the image "
-        "does not have a dependency that it must ship. Please report it. "
-        "Do not install the package into the container. /opt/hermes is "
-        "read-only, and the next image update removes the change."
-    )
+    return _managed_install_reason("", None)
 
 
 def _allow_lazy_installs() -> bool:
@@ -1067,19 +1124,14 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
     # refresh_active_features classifies FeatureUnavailable by that prefix and
     # reports anything else as a hard failure rather than a skip.
     if _lazy_install_target() is None:
-        try:
-            from hermes_cli.config import get_managed_system
-
-            managed_by = get_managed_system()
-        except Exception:
-            managed_by = ""  # config unreadable — proceed with the install
+        managed_by = _managed_system()
         if managed_by:
             raise FeatureUnavailable(
                 feature, missing,
-                f"unsupported on {managed_by}-managed installs: this build's "
-                f"packages come from {managed_by}, so Hermes cannot install "
-                f"them at runtime. Add the dependencies for {feature!r} via "
-                f"{managed_by} (or run a pip/uv install of Hermes instead)",
+                # Prefix "unsupported " on purpose: refresh_active_features
+                # reads that prefix to tell a skip from a hard failure.
+                "unsupported on a managed install: "
+                + _managed_install_reason(feature, LAZY_FEATURES.get(feature)),
                 # The store is read-only. A `uv pip install` hint here
                 # fails with EROFS.
                 actionable=False,

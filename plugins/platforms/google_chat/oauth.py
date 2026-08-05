@@ -160,36 +160,28 @@ SCOPES: List[str] = [
     "https://www.googleapis.com/auth/chat.messages.create",
 ]
 
-# Pip packages required by the Google Chat adapter and its OAuth flow.
-#
-# Read from the ``[google-chat]`` extra in pyproject.toml rather than restated
-# here. Duplicating the pins meant a security floor (e.g. httplib2
-# GHSA-j5g9-f88f-gfj3) had to be bumped in two files in lockstep, and the copy
-# here silently drifting was invisible to `uv audit` / OSV, which read the
-# lockfile. The literal list is kept only as a fallback for installs where
-# pyproject isn't on disk.
-_FALLBACK_PACKAGES = [
-    "google-cloud-pubsub==2.39.0",
-    "google-api-python-client==2.194.0",
-    "google-auth==2.55.1",
-    "google-auth-oauthlib==1.3.1",
-    "google-auth-httplib2==0.3.1",
-    "httplib2==0.32.0",
-    "pyasn1==0.6.4",
-]
+# The ``[google-chat]`` extra in pyproject.toml holds the packages that this
+# adapter and its OAuth flow need. Do not repeat the pins here. A second copy
+# needs its own update for each security floor, such as httplib2
+# GHSA-j5g9-f88f-gfj3, and `uv audit` and OSV read the lockfile, so they
+# cannot see a copy that differs.
+_EXTRA_NAME = "google-chat"
 
 
 def _required_packages() -> List[str]:
-    """Return the [google-chat] extra's specs, falling back to the literals."""
+    """Return the specs in the [google-chat] extra.
+
+    Returns an empty list when Hermes cannot read pyproject.toml. A NixOS
+    install has no pyproject.toml beside the code, and its /nix/store is
+    read-only, so an install cannot succeed there. The caller then reports
+    how to add the extra through NixOS.
+    """
     try:
         from tools.lazy_deps import extra_specs
 
-        specs = list(extra_specs("google-chat"))
-        if specs:
-            return specs
+        return list(extra_specs(_EXTRA_NAME))
     except Exception:
-        pass
-    return list(_FALLBACK_PACKAGES)
+        return []
 
 # Out-of-band redirect: Google deprecated the ``urn:ietf:wg:oauth:2.0:oob``
 # flow, so we use a localhost redirect that's expected to FAIL. The user
@@ -415,6 +407,19 @@ def _missing_required_packages() -> List[str]:
 
 
 def install_deps() -> bool:
+    required = _required_packages()
+    if not required:
+        # No pyproject.toml on disk, or no [google-chat] extra. A managed
+        # install (NixOS) reaches this, and its store is read-only, so an
+        # install here cannot succeed. Report the remedy for the deployment.
+        from tools.lazy_deps import _managed_install_reason
+
+        print(
+            "ERROR: cannot install the Google Chat dependencies: "
+            + _managed_install_reason("platform.google_chat", _EXTRA_NAME)
+        )
+        return False
+
     missing = _missing_required_packages()
     if not missing:
         print("Dependencies already installed.")
