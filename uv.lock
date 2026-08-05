@@ -12,11 +12,11 @@ exclude-newer = "0001-01-01T00:00:00Z" # This has no effect and is included for 
 exclude-newer-span = "P14D"
 
 [options.exclude-newer-package]
-vercel = false
-aiohttp = false
-cryptography = false
-nemo-relay = false
-huggingface-hub = false
+vercel = "2026-07-21T21:06:02Z"
+aiohttp = "2026-07-23T01:57:28Z"
+cryptography = "2026-07-31T14:25:11Z"
+nemo-relay = "2026-08-03T14:55:50Z"
+huggingface-hub = "2026-07-17T09:54:02Z"
 
 [manifest]
 overrides = [

@@ -495,10 +495,19 @@ override-dependencies = [
   "cryptography>=50,<51",
 ]
 exclude-newer = "14 days"
-# Each package listed as `false` is exempt from the quarantine window above.
-# cryptography is exempt because 50.0.0 carries the CVE-2026-69247 fix, and
-# waiting 14 days for it would leave the advisory open.
-exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = false, aiohttp = false, cryptography = false }
+# Per-package overrides of the quarantine window above. Each package here
+# needs a version that the window would hide, so each gets its own cut-off
+# instead.
+#
+# Give a date, not `false`. `false` removes the cut-off for that package
+# altogether, so uv would accept a release published minutes ago — the exact
+# risk that exclude-newer exists to remove. A date holds the package at the
+# version we pinned while it keeps the guarantee for anything newer.
+#
+# Each timestamp is the last file upload for the pinned version, so uv can
+# see every wheel of that release and no later release. Move a timestamp
+# only when you move the matching pin.
+exclude-newer-package = { vercel = "2026-07-21T21:06:02Z", nemo-relay = "2026-08-03T14:55:50Z", huggingface_hub = "2026-07-17T09:54:02Z", aiohttp = "2026-07-23T01:57:28Z", cryptography = "2026-07-31T14:25:11Z" }
 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's
