@@ -174,6 +174,19 @@ def build_stamp(
     elif dirty and distance is None:
         display_version = f"{display_version}+?"
 
+    # Bundled desktop payloads. The desktop-bundled-release workflow sets
+    # HERMES_DESKTOP_BUNDLED=1 and pins the release tag. A bundled build
+    # without a tag is a hard error: electron-updater and the offline
+    # re-materialization both key on the tag, so a tagless bundled artifact
+    # cannot update itself.
+    payload = os.environ.get("HERMES_DESKTOP_BUNDLED") == "1"
+    tag = os.environ.get("HERMES_PAYLOAD_TAG") or None
+    if payload and not (tag and re.match(r"^v\d+\.\d+\.\d+$", tag)):
+        raise SystemExit(
+            "write_install_stamp: HERMES_DESKTOP_BUNDLED=1 requires "
+            f"HERMES_PAYLOAD_TAG=vX.Y.Z (got {tag!r})"
+        )
+
     return {
         "schemaVersion": STAMP_SCHEMA_VERSION,
         "commit": commit,
@@ -186,6 +199,8 @@ def build_stamp(
         "baseVersion": base_version,
         "displayVersion": display_version,
         "distance": distance,
+        "payload": payload,
+        "tag": tag if payload else None,
     }
 
 
