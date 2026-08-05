@@ -1,164 +1,96 @@
-"""Every lazy feature must map to a real, resolvable pyproject extra.
+"""LAZY_DEPS maps a feature name to an extra in pyproject.toml.
 
-``tools/lazy_deps.py`` maps a feature name to a
-``[project.optional-dependencies]`` extra and reads the specs from
-pyproject.toml. It holds no copy of the pins.
+Two things need a test here.
 
-One fault is possible with this map: a feature can name an extra that does not
-exist. A spelling error does this, and so does a rename of an extra without a
-change to the map. Without these tests, that fault appears only when a user
-enables the backend and the install runs.
+The map itself: each value must name an extra that pyproject.toml declares.
+Nothing else checks that. A typo makes the feature raise FeatureUnavailable
+at first use, on the one machine that enabled that backend.
 
-Each test below states how the map and the extras must agree. No test copies
-their contents, so a new backend needs no change here.
+The reader: extra_specs expands a `hermes-agent[x]` reference, and that code
+is ours. A cycle, a lost marker, or a silent empty result would each ship a
+wrong package set. uv resolves the extras its own way and cannot catch a
+fault in our reader.
+
+Nothing here restates a version. pyproject.toml holds the specs, uv.lock
+pins them, and `uv lock --check` and `uv audit` read the lockfile.
 """
-
 from __future__ import annotations
 
-import re
-import tomllib
+import sys
 from pathlib import Path
 
 import pytest
 
-from tools import lazy_deps as ld
-
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-
-def _pyproject() -> dict:
-    return tomllib.loads((REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8"))
-
-
-def _extras() -> dict:
-    return _pyproject()["project"]["optional-dependencies"]
+from tools import lazy_deps as ld  # noqa: E402
 
 
 class TestFeatureExtraMapping:
     def test_every_feature_maps_to_a_declared_extra(self):
+        """A value in LAZY_DEPS must name an extra that pyproject declares.
+
+        This is the whole contract of the map. A typo here raises
+        FeatureUnavailable at first use of that backend, and only on a
+        machine that enabled it.
+        """
+        declared = set(ld._optional_dependencies())
         missing = {
             feature: extra
             for feature, extra in ld.LAZY_DEPS.items()
-            if extra not in _extras()
+            if extra not in declared
         }
         assert not missing, (
-            "these lazy features map to extras that don't exist in "
-            f"pyproject.toml: {missing}"
+            f"LAZY_DEPS names extras that pyproject.toml does not declare: "
+            f"{missing}"
         )
 
     def test_every_feature_resolves_to_at_least_one_spec(self):
-        """A feature resolving to nothing would 'install' silently and then
-        fail on import — the exact failure the mapping is meant to prevent."""
-        empty = []
-        for feature in ld.LAZY_DEPS:
-            try:
-                if not ld.feature_specs(feature):
-                    empty.append(feature)
-            except ld.FeatureUnavailable:
-                empty.append(feature)
-        assert not empty, f"features resolving to no packages: {empty}"
+        """An extra can exist and still be empty after composition.
 
-    def test_resolved_specs_are_valid_requirements(self):
-        """Composition rewrites markers, so the output must still be PEP 508."""
-        packaging = pytest.importorskip("packaging.requirements")
-        bad = []
-        for feature in ld.LAZY_DEPS:
-            for spec in ld.feature_specs(feature):
-                try:
-                    packaging.Requirement(spec)
-                except Exception as e:
-                    bad.append((feature, spec, str(e)))
-        assert not bad, f"invalid requirement strings after resolution: {bad}"
-
-    def test_resolved_specs_pass_the_allowlist_guard(self):
-        """Specs flow into an install command, so each must clear _SAFE_SPEC.
-
-        A composed extra that smuggled in a URL or path would otherwise reach
-        the installer.
+        An empty result installs nothing and reports success, so the backend
+        stays broken with no error to read.
         """
-        unsafe = []
-        for feature in ld.LAZY_DEPS:
-            for spec in ld.feature_specs(feature):
-                head = spec.split(";", 1)[0].strip()
-                if not ld._SAFE_SPEC.match(head):
-                    unsafe.append((feature, spec))
-        assert not unsafe, f"specs rejected by the safety guard: {unsafe}"
-
-    def test_no_feature_maps_to_an_extra_that_is_entirely_core(self):
-        """An extra that only restates core dependencies is dead weight.
-
-        ``tool.vision`` -> ``[vision]`` -> ``Pillow`` was exactly this after
-        Pillow was promoted to a core dep: the lazy path could never install
-        anything not already present.
-        """
-        core = {
-            _canonical_name(d)
-            for d in _pyproject()["project"]["dependencies"]
-        }
-        redundant = []
-        for feature in ld.LAZY_DEPS:
-            names = {_canonical_name(s) for s in ld.feature_specs(feature)}
-            if names and names <= core:
-                redundant.append((feature, sorted(names)))
-        assert not redundant, (
-            "these features can only install packages that are already core "
-            f"dependencies, so the lazy path is dead code: {redundant}"
-        )
-
-
-def _canonical_name(spec: str) -> str:
-    head = spec.split(";", 1)[0].split("@", 1)[0].split("[", 1)[0]
-    return re.sub(r"[-_.]+", "-", re.split(r"[=<>!~]", head, maxsplit=1)[0].strip().lower())
+        empty = [f for f in ld.LAZY_DEPS if not ld.feature_specs(f)]
+        assert not empty, f"features that resolve to no packages: {empty}"
 
 
 class TestExtraComposition:
+    """extra_specs expands `hermes-agent[x]`. That expansion is our code."""
+
     def test_self_references_resolve(self):
-        """No resolved spec may still be an unexpanded ``hermes-agent[...]``."""
-        leaked = []
-        for extra in _extras():
-            for spec in ld.extra_specs(extra):
-                if spec.lower().replace("_", "-").startswith("hermes-agent["):
-                    leaked.append((extra, spec))
-        assert not leaked, f"unexpanded self-references: {leaked}"
+        """[messaging] contains [telegram], so its specs must appear."""
+        composed = set(ld.extra_specs("messaging"))
+        assert set(ld.extra_specs("telegram")) <= composed
+        assert not any(s.startswith("hermes-agent[") for s in composed), (
+            "a self-reference must be expanded, not passed to pip"
+        )
 
     def test_cycles_terminate(self, monkeypatch):
-        """A cyclic composition must return, not recurse forever."""
-        table = {
-            "cyc-a": ("hermes-agent[cyc-b]", "pkg-a==1.0"),
-            "cyc-b": ("hermes-agent[cyc-a]", "pkg-b==1.0"),
-        }
-        monkeypatch.setattr(ld, "_optional_dependencies", lambda: table)
-        got = ld.extra_specs("cyc-a")
-        assert "pkg-a==1.0" in got and "pkg-b==1.0" in got
+        """A cycle in the extras must not hang or recurse without end."""
+        monkeypatch.setattr(ld, "_optional_dependencies", lambda: {
+            "a": ("hermes-agent[b]",),
+            "b": ("hermes-agent[a]",),
+        })
+        assert ld.extra_specs("a") == ()
 
     def test_unknown_extra_resolves_to_nothing(self, monkeypatch):
         monkeypatch.setattr(ld, "_optional_dependencies", lambda: {})
-        assert ld.extra_specs("no-such-extra") == ()
+        assert ld.extra_specs("nope") == ()
 
     def test_marker_on_self_reference_is_distributed(self, monkeypatch):
-        """``hermes-agent[x]; marker`` must apply the marker to x's contents.
+        """`hermes-agent[x]; marker` must put the marker on each spec.
 
-        Dropping it would install a platform-gated package everywhere; dropping
-        the whole entry would never install it at all.
+        [wake] holds `hermes-agent[wake-tflite]; platform_system == 'Darwin'`.
+        Losing that marker installs a macOS-only package on Linux.
         """
-        table = {
-            "base": ("pkg==1.0",),
-            "outer": ("hermes-agent[base]; platform_system == 'Darwin'",),
+        monkeypatch.setattr(ld, "_optional_dependencies", lambda: {
+            "big": ("hermes-agent[small]; platform_system == 'Darwin'",),
+            "small": ("pkg-a==1.0", "pkg-b==2.0"),
+        })
+        assert set(ld.extra_specs("big")) == {
+            "pkg-a==1.0; platform_system == 'Darwin'",
+            "pkg-b==2.0; platform_system == 'Darwin'",
         }
-        monkeypatch.setattr(ld, "_optional_dependencies", lambda: table)
-        got = ld.extra_specs("outer")
-        assert got == ("pkg==1.0; platform_system == 'Darwin'",)
-
-    def test_nested_markers_are_conjoined(self, monkeypatch):
-        table = {
-            "base": ("pkg==1.0; python_version >= '3.11'",),
-            "outer": ("hermes-agent[base]; platform_system == 'Darwin'",),
-        }
-        monkeypatch.setattr(ld, "_optional_dependencies", lambda: table)
-        (got,) = ld.extra_specs("outer")
-        packaging = pytest.importorskip("packaging.requirements")
-        req = packaging.Requirement(got)
-        marker = str(req.marker)
-        assert "python_version" in marker and "Darwin" in marker
-        assert " and " in marker

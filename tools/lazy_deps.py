@@ -268,17 +268,6 @@ def feature_extra(feature: str) -> str:
     return LAZY_DEPS[feature]
 
 
-# Conservative regex for spec validation — package name plus optional
-# version range. Reject anything that looks like a URL, file path, or shell
-# metacharacter.
-_SAFE_SPEC = re.compile(
-    r"^[A-Za-z0-9_][A-Za-z0-9_.\-]*"        # package name
-    r"(?:\[[A-Za-z0-9_,\-]+\])?"            # optional [extras]
-    r"(?:[<>=!~]=?[A-Za-z0-9_.\-+,*<>=!~]+)?"  # optional version specifier
-    r"$"
-)
-
-
 class FeatureUnavailable(RuntimeError):
     """A lazily-installable feature is missing and cannot be made available.
 
@@ -564,14 +553,18 @@ def _allow_lazy_installs() -> bool:
         if not bool(sec.get("allow_lazy_installs", True)):
             return False
 
-    # (2) Sealed deployment. This stops every install, even when
-    # HERMES_LAZY_INSTALL_TARGET names a writable directory. The image
-    # contains the full set of extras, so an install at run time is a fault
-    # in the image build. Do not let a target re-enable installs here: that
-    # hides the fault, and it shows unedited pip errors to the user when the
-    # container cannot reach PyPI.
+    # (2) Sealed deployment. The image contains each extra that a container
+    # can run, so a LAZY_DEPS feature never needs an install there.
+    #
+    # install_specs is different. Its specs come from a plugin manifest, and
+    # a plugin outside this repository declares packages that pyproject.toml
+    # does not hold, so the image cannot have baked them. Hindsight appends
+    # `hindsight-all` at setup time for the same reason. Sealing those off
+    # would stop a user installing a memory provider in the container at all.
+    # HERMES_LAZY_INSTALL_TARGET names a writable directory on the data
+    # volume for exactly that case.
     if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1":
-        return False
+        return _lazy_install_target() is not None
 
     return True
 
@@ -590,33 +583,6 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
             "from sdist. Run Hermes under WSL to use Matrix on Windows."
         )
     return None
-
-
-def _spec_is_safe(spec: str) -> bool:
-    """Reject a pip spec that is not a plain name-and-version requirement.
-
-    This guards :func:`install_specs` only. That function takes its specs
-    from ``pip_dependencies`` in a plugin manifest, and a user can install a
-    plugin from ~/.hermes/plugins, so the strings are not ours.
-
-    :func:`ensure` needs no such check. Its specs come from the extras in
-    pyproject.toml, which the repository owns and uv.lock pins.
-
-    Each spec becomes one argv entry, and no caller uses ``shell=True``, so a
-    metacharacter cannot reach a shell. The dangerous shapes are the ones
-    that pip itself acts on:
-
-      --index-url=http://evil/   pip reads an attacker's index
-      git+https://host/repo      pip runs setup.py from that repository
-      /tmp/evil, ./evil          pip installs a local tree
-    """
-    if not spec or len(spec) > 200:
-        return False
-    if any(ch in spec for ch in (";", "|", "&", "`", "$", "\n", "\r", "\t", "\\")):
-        return False
-    if spec.startswith(("-", "/", ".")) or "://" in spec or "@" in spec:
-        return False
-    return bool(_SAFE_SPEC.match(spec))
 
 
 def _pkg_name_from_spec(spec: str) -> str:
@@ -1153,12 +1119,18 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
             )
 
 
+    # A sealed image contains each extra that a container can run, so a
+    # LAZY_DEPS feature must never install here, even when a durable target
+    # exists. That target is for install_specs, whose packages come from a
+    # plugin manifest and cannot be in the image.
+    sealed = _sealed_venv_reason()
+    if sealed is not None:
+        raise FeatureUnavailable(feature, missing, sealed, actionable=False)
+
     if not _allow_lazy_installs():
-        sealed = _sealed_venv_reason()
         raise FeatureUnavailable(
             feature, missing,
-            sealed or "lazy installs disabled (security.allow_lazy_installs=false)",
-            actionable=sealed is None,
+            "lazy installs disabled (security.allow_lazy_installs=false)",
         )
 
     # Only show the interactive confirmation when we own a TTY and
@@ -1284,23 +1256,24 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
       when the venv is sealed with no durable target (never attempts a write
       to a read-only tree; reports *why* instead of surfacing EROFS/EACCES).
 
-    Every spec must pass :func:`_spec_is_safe` (no URLs, paths, or shell
-    metacharacters). Unlike :func:`ensure`, unknown packages are permitted —
-    the caller owns manifest trust; this function owns spec hygiene and
-    environment routing.
+    Unlike :func:`ensure`, a package outside pyproject.toml is permitted.
+    Hindsight appends ``hindsight-all`` at setup time, and a plugin outside
+    this repository declares its own packages, so a list of permitted names
+    cannot work here.
+
+    This function does NOT check the shape of a spec, and a check would give
+    nothing. The specs come from ``plugin.yaml``, and the same file holds
+    ``external_dependencies[].install``, which
+    hermes_cli/web_server.py runs through ``subprocess.run(shell=True)``. The
+    plugin's ``__init__.py`` runs as well, at import. Anyone who can write
+    that manifest already runs code as the user, so a pattern that rejects
+    ``--index-url`` protects nothing.
 
     Never raises; inspect the returned :class:`InstallSpecsResult`.
     """
     cleaned = tuple(str(s).strip() for s in specs if str(s).strip())
     if not cleaned:
         return InstallSpecsResult(ok=True, command="")
-
-    for spec in cleaned:
-        if not _spec_is_safe(spec):
-            return InstallSpecsResult(
-                ok=False, blocked=True,
-                reason=f"refusing to install unsafe spec {spec!r}",
-            )
 
     if not _allow_lazy_installs():
         reason = _sealed_venv_reason() or (

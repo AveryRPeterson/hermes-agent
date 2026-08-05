@@ -57,23 +57,54 @@ class TestGatingWithTarget:
         )
         assert ld._allow_lazy_installs() is False
 
-    def test_disable_env_blocks_even_with_a_target(self, monkeypatch, tmp_path):
-        """The sealed flag stops installs even when a target directory is set.
+    def test_a_target_permits_install_specs_in_a_sealed_image(
+        self, monkeypatch, tmp_path
+    ):
+        """install_specs must still work in the container.
 
-        Do not let HERMES_LAZY_INSTALL_TARGET permit installs here. The image
-        contains each extra that a container can run, so an install at run
-        time means that the image does not have a dependency that it must
-        ship. A download from PyPI hides that fault, and it shows unedited
-        pip errors to the user when the container cannot reach PyPI. A volume
-        from an earlier image can still carry the directory, and it must not
-        permit installs again.
+        A memory provider that a user installs into ~/.hermes/plugins names
+        its own packages in plugin.yaml, and pyproject.toml does not hold
+        them, so no image can bake them. The target directory is where those
+        go. ensure() is the one that must refuse — see
+        test_ensure_refuses_in_a_sealed_image_even_with_a_target.
         """
         monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
         monkeypatch.setenv(ld._LAZY_TARGET_ENV, str(tmp_path))
         monkeypatch.setattr(
             "hermes_cli.config.load_config", lambda: {}, raising=False
         )
+        assert ld._allow_lazy_installs() is True
+
+    def test_sealed_image_without_a_target_permits_nothing(self, monkeypatch):
+        """No target means no writable directory, so no install can work."""
+        monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
+        monkeypatch.delenv(ld._LAZY_TARGET_ENV, raising=False)
+        monkeypatch.setattr(
+            "hermes_cli.config.load_config", lambda: {}, raising=False
+        )
         assert ld._allow_lazy_installs() is False
+
+    def test_ensure_refuses_in_a_sealed_image_even_with_a_target(
+        self, monkeypatch, tmp_path
+    ):
+        """A LAZY_DEPS feature never installs in the image.
+
+        The build bakes each extra that a container can run, so a feature
+        that reaches this point names a dependency the image should have
+        shipped. Report that instead of a download from PyPI. The target
+        directory must not change this: it exists for install_specs.
+        """
+        monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
+        monkeypatch.setenv(ld._LAZY_TARGET_ENV, str(tmp_path))
+        monkeypatch.setattr(ld, "feature_missing", lambda _f: ("zzzpkg==1.0",))
+        monkeypatch.setattr(
+            ld, "_venv_pip_install",
+            lambda *a, **kw: pytest.fail("pip must not run in a sealed image"),
+        )
+        feature = next(iter(ld.LAZY_DEPS))
+        with pytest.raises(ld.FeatureUnavailable) as excinfo:
+            ld.ensure(feature, prompt=False)
+        assert "HERMES_DISABLE_LAZY_INSTALLS" in str(excinfo.value)
 
     def test_sealed_reason_does_not_blame_the_config_key(self, monkeypatch):
         """The sealed message must not name a setting that the user never set.

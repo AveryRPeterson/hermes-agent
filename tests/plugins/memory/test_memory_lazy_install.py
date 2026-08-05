@@ -194,17 +194,17 @@ class TestSupermemoryIsAvailable:
 
 
 class TestSealedVenvBlocksInstalls:
-    """A sealed deployment (the Docker image) refuses runtime installs.
+    """A sealed deployment (the Docker image) refuses a LAZY_DEPS install.
 
-    The image contains each extra that a container can run, and this includes
-    these memory SDKs. An install at run time thus means that the image does
-    not have a dependency that it must ship. The block applies in each case.
-    A HERMES_LAZY_INSTALL_TARGET left on an earlier volume must not permit
-    installs again.
+    Each of these memory SDKs is an extra in pyproject.toml, so the image
+    contains it. A call to ensure() here means that the image does not have a
+    dependency that it must ship, and a target directory must not change
+    that: the target exists for install_specs, whose packages come from a
+    plugin manifest and cannot be in any image.
     """
 
     @pytest.mark.parametrize("feature", MEMORY_FEATURES)
-    def test_sealed_venv_blocks_even_with_a_stale_target(
+    def test_sealed_venv_blocks_even_with_a_target(
         self, feature, monkeypatch, tmp_path
     ):
         monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
@@ -213,8 +213,6 @@ class TestSealedVenvBlocksInstalls:
             "hermes_cli.config.load_config",
             lambda: {"security": {"allow_lazy_installs": True}},
         )
-        assert ld._allow_lazy_installs() is False
-
         monkeypatch.setattr(ld, "_is_satisfied", lambda spec: False)
         monkeypatch.setattr(
             ld, "_venv_pip_install",

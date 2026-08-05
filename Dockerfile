@@ -403,25 +403,23 @@ ENV HERMES_WRITE_SAFE_ROOT=/opt/data
 # The published image seals /opt/hermes (root-owned, read-only) so a runtime
 # lazy install can't mutate the agent's own venv and brick it.
 #
-# This is now an ABSOLUTE seal, not a redirect. Every extra that can function
-# in a container is baked into the image (see the `uv sync --all-extras`
-# above), so a lazy install firing here means the image is missing something
-# it should have shipped — a build-time bug. Failing loudly surfaces that;
-# silently reaching out to PyPI hid it, and produced raw pip resolution errors
-# in the user's face when egress was blocked (the common container case).
+# The image bakes each extra that a container can run (see the
+# `uv sync --all-extras` above), so a LAZY_DEPS feature never needs an
+# install here. tools/lazy_deps.ensure() refuses one and says the image
+# should have shipped the dependency, which is a fault in the build.
 #
-# Do not set HERMES_LAZY_INSTALL_TARGET here. That variable sends installs to
-# a writable directory on /opt/data and thus permits them again. The image
-# contains each extra that a container can run, so the variable has no
-# correct use here, and it lets the container run a dependency that no
-# scanner examined.
+# HERMES_LAZY_INSTALL_TARGET is for the case the image CANNOT cover: a
+# memory provider that a user installs into ~/.hermes/plugins declares its
+# own packages in plugin.yaml, and pyproject.toml does not hold them, so no
+# build can bake them. Hindsight appends `hindsight-all` at setup time for
+# the same reason. install_specs sends those to this directory on the data
+# volume, then puts it on sys.path, so the packages survive a container
+# restart and import without one.
 #
-# A volume from an earlier image can still hold packages under
-# /opt/data/lazy-packages. Nothing imports them now. This removes no
-# function: the image contains each extra, and the two plugin dependencies
-# that are not extras (httpx, requests) are core dependencies. You can
-# delete that directory.
+# /opt/hermes stays read-only either way. Only this directory accepts a
+# write, and only install_specs writes to it.
 ENV HERMES_DISABLE_LAZY_INSTALLS=1
+ENV HERMES_LAZY_INSTALL_TARGET=/opt/data/lazy-packages
 
 # `docker exec` privilege-drop shim. When operators run
 # `docker exec <c> hermes ...` they default to root, and any file the

@@ -134,9 +134,14 @@ def test_unmanaged_install_is_not_blocked_by_the_guard(monkeypatch):
 def test_durable_install_target_overrides_the_guard(monkeypatch, tmp_path):
     """The container deployment sets HERMES_MANAGED *and* a writable target.
 
-    Dockerfile sets HERMES_LAZY_INSTALL_TARGET and the NixOS container module
-    passes HERMES_MANAGED=true; blocking there would break that deployment.
+    The NixOS container module passes HERMES_MANAGED=true, and the Dockerfile
+    sets HERMES_LAZY_INSTALL_TARGET. The managed guard must not stop an
+    install that has somewhere to write.
+
+    The sealed flag is a separate gate, and tests/conftest.py sets it for
+    each test, so clear it here to leave the managed guard on its own.
     """
+    monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
     monkeypatch.setattr("hermes_cli.config.get_managed_system", lambda: "nixos")
     monkeypatch.setattr(lazy_deps, "_lazy_install_target", lambda: tmp_path)
 

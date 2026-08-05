@@ -247,7 +247,7 @@ if [ "$needs_chown" = true ]; then
     # Hermes-owned subdirs: recursive chown is safe here because these are
     # created and managed exclusively by hermes (see the s6-setuidgid mkdir
     # -p block below for the canonical list).
-    for sub in cron sessions logs hooks memories skills skins plans workspace home profiles pairing platforms/pairing; do
+    for sub in cron sessions logs hooks memories skills skins plans workspace home profiles pairing platforms/pairing lazy-packages; do
         if [ -e "$HERMES_HOME/$sub" ] && tree_has_non_hermes_owner "$HERMES_HOME/$sub"; then
             chown_hermes_tree "$HERMES_HOME/$sub"
         fi
@@ -262,16 +262,20 @@ fi
 # non-writable prevents an agent session from self-modifying the installed
 # source, venv, TUI bundle, or node_modules and bricking the gateway.
 #
-# The image stops installs at run time and gives them no target directory.
-# The build puts each extra that a container can run into the image (the
-# Dockerfile runs `uv sync --all-extras` without the microphone extras and
-# the dev extra). An install here would mean that the image does not have a
-# dependency that it must ship, so Hermes raises an error instead of a
-# download from PyPI.
+# A LAZY_DEPS feature never installs here. The build puts each extra that a
+# container can run into the image, so Hermes raises an error instead of a
+# download from PyPI, and the error says the image should have shipped the
+# dependency.
 #
-# Do not create or chown $HERMES_HOME/lazy-packages. A volume from an
-# earlier image can still hold that directory. Nothing imports it, and you
-# can delete it.
+# $HERMES_HOME/lazy-packages stays. install_specs writes there, for the
+# packages that no build can bake: a memory provider that a user installs
+# into ~/.hermes/plugins declares its own packages in plugin.yaml, and
+# pyproject.toml does not hold them. The directory goes on the END of
+# sys.path, so a package there can only add a module and can never shadow a
+# core one. That keeps the sealed venv intact. It is seeded and chowned to
+# hermes in the blocks above, so an install works as the unprivileged user,
+# and it survives a container restart. An ABI stamp clears it when a rebuild
+# moves the interpreter.
 
 # Always reset ownership of $HERMES_HOME/profiles to hermes on every
 # boot. Profile dirs and files can land owned by root when commands
