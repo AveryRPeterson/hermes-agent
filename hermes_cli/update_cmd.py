@@ -119,7 +119,11 @@ def _parse_release_tag(tag: str):
     if _RELEASE_TAG_RE is None:
         import re
 
-        _RELEASE_TAG_RE = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
+        # Restrict the major component to three digits. The historical
+        # CalVer tags (for example v2026.7.20) use a four-digit year, and
+        # a numeric sort would rank them above every SemVer release. This
+        # matches _SEMVER_TAG_RE in scripts/write_install_stamp.py.
+        _RELEASE_TAG_RE = re.compile(r"^v(0|[1-9]\d{0,2})\.(\d+)\.(\d+)$")
     m = _RELEASE_TAG_RE.match(tag.strip())
     if not m:
         return None

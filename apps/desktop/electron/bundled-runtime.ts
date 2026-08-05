@@ -287,3 +287,70 @@ export function gatherGitFacts(
 export function executeAdoptionCheckout(activeRoot: string, tag: string, git: GitRunner): boolean {
   return git(['checkout', '-B', 'main', `${tag}^{commit}`], activeRoot).code === 0
 }
+
+// ─── update channel ─────────────────────────────────────────────────────────
+
+/**
+ * The update channel of a checkout. Mirrors the resolution in
+ * hermes_cli/install_manifest.py: a bundled install is always stable, a
+ * source manifest carries its own channel, and a missing or unreadable
+ * manifest means main. The channel decides what the version pill compares
+ * against. The install mode decides only the apply mechanism.
+ */
+export function resolveChannel(
+  manifest: { installMode?: string; channel?: string } | null | undefined
+): 'stable' | 'main' {
+  if (manifest?.installMode === 'bundled') {
+    return 'stable'
+  }
+
+  return manifest?.channel === 'stable' ? 'stable' : 'main'
+}
+
+/**
+ * Pick the newest final release tag (vX.Y.Z, no prerelease suffix) from
+ * `git ls-remote --tags` output. Numeric ordering, so v0.10.0 > v0.9.0.
+ * Returns null when the output has no final release tag.
+ *
+ * A peeled entry (`refs/tags/v1.2.3^{}`) resolves the commit that an
+ * annotated tag points at. It wins over the unpeeled line of the same tag.
+ */
+export function latestReleaseFromLsRemote(output: string): { tag: string; sha: string } | null {
+  const versions = new Map<string, { key: [number, number, number]; sha: string; peeled: boolean }>()
+
+  for (const line of output.split('\n')) {
+    // The major component is capped at three digits: the historical CalVer
+    // tags (v2026.7.20) would win every numeric sort. This mirrors
+    // _RELEASE_TAG_RE in hermes_cli/update_cmd.py and _SEMVER_TAG_RE in
+    // scripts/write_install_stamp.py.
+    const m = line.match(/^([0-9a-f]{40})\trefs\/tags\/(v(?:0|[1-9]\d{0,2})\.\d+\.\d+)(\^\{\})?$/)
+
+    if (!m) {
+      continue
+    }
+
+    const [, sha, tag, peel] = m
+    const existing = versions.get(tag)
+
+    if (!existing || (peel && !existing.peeled)) {
+      const [major, minor, patch] = tag.slice(1).split('.').map(Number)
+
+      versions.set(tag, { key: [major, minor, patch], sha, peeled: Boolean(peel) })
+    }
+  }
+
+  let best: { tag: string; sha: string; key: [number, number, number] } | null = null
+
+  for (const [tag, { key, sha }] of versions) {
+    const newer =
+      !best ||
+      key[0] > best.key[0] ||
+      (key[0] === best.key[0] && (key[1] > best.key[1] || (key[1] === best.key[1] && key[2] > best.key[2])))
+
+    if (newer) {
+      best = { tag, sha, key }
+    }
+  }
+
+  return best ? { tag: best.tag, sha: best.sha } : null
+}

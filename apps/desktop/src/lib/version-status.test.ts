@@ -80,3 +80,35 @@ describe('resolveVersionStatus', () => {
     expect(backend().unknown).toBe(true)
   })
 })
+
+describe('stable channel vocabulary', () => {
+  it('names the release, never a commit count', () => {
+    const status = client({ behind: 1, channel: 'stable', latestTag: 'v0.21.0', version: '0.20.0' })
+
+    expect(status.label).toBe('v0.20.0 (update)')
+    expect(status.label).not.toContain('+1')
+    expect(status.hasUpdate).toBe(true)
+    expect(status.tooltip).toContain('v0.21.0 is available')
+    expect(status.tooltip).not.toContain('behind')
+  })
+
+  it('omits branch vocabulary on the stable channel', () => {
+    const status = client({ branch: 'main', channel: 'stable', version: '0.20.0' })
+
+    expect(status.tooltip ?? '').not.toContain('branch')
+  })
+
+  it('falls back to the update word when the check found no tag name', () => {
+    const status = client({ channel: 'stable', updateAvailable: true, version: '0.20.0' })
+
+    expect(status.label).toBe('v0.20.0 (update)')
+    expect(status.hasUpdate).toBe(true)
+  })
+
+  it('main channel behavior is unchanged', () => {
+    const status = client({ behind: 12, branch: 'main', version: '0.4.2' })
+
+    expect(status.label).toBe('v0.4.2 (+12)')
+    expect(status.tooltip).toContain('12 commits behind main')
+  })
+})

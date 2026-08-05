@@ -2233,6 +2233,7 @@ export const zhHant = defineLocale({
       update: '更新',
       updateInProgress: '更新中',
       commitsBehind: (count, branch) => `落後 ${branch} ${count} 個提交`,
+      releaseAvailable: tag => `${tag} 已發布`,
       desktopVersion: version => `Hermes Desktop v${version}`,
       backendVersion: version => `後端 v${version}`,
       clientLabel: version => `用戶端 v${version}`,

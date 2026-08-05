@@ -279,11 +279,14 @@ export function useStatusbarItems({
       // The build stamp is the authority for what this binary IS; updateStatus
       // knows what git says about the checkout. Prefer the stamp, fall back.
       branch: desktopVersion?.branch ?? updateStatus?.branch,
+      channel: updateStatus?.channel,
       copy,
+      latestTag: updateStatus?.latestTag ?? updateStatus?.latestVersion,
       remote: connection?.mode === 'remote',
       restarting: updateApply.stage === 'restart',
       sha: desktopVersion?.commit?.slice(0, 7) ?? updateStatus?.currentSha?.slice(0, 7) ?? null,
       target: 'client',
+      updateAvailable: updateStatus?.updateAvailable,
       version: desktopVersion?.appVersion
     })
 

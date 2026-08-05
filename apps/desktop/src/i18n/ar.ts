@@ -2072,6 +2072,7 @@ export const ar = defineLocale({
       update: 'تحديث',
       updateInProgress: 'التحديث جار',
       commitsBehind: (count, branch) => `${count} commits خلف ${branch}`,
+      releaseAvailable: tag => `الإصدار ${tag} متاح`,
       desktopVersion: version => `سطح المكتب ${version}`,
       backendVersion: version => `الخلفية ${version}`,
       clientLabel: version => `العميل ${version}`,

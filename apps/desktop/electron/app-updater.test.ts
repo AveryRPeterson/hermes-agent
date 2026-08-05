@@ -48,8 +48,10 @@ test('feed check reports an available update when versions differ', () => {
 
   assert.equal(out.supported, true)
   assert.equal(out.mechanism, 'app-updater')
+  assert.equal(out.channel, 'stable')
   assert.equal(out.currentVersion, '0.17.0')
   assert.equal(out.latestVersion, '0.18.0')
+  assert.equal(out.latestTag, 'v0.18.0')
   assert.equal(out.updateAvailable, true)
   assert.ok(out.fetchedAt > 0)
 })

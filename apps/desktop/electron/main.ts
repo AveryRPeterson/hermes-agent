@@ -50,7 +50,7 @@ import { shouldLatchBackendStartFailure, shouldLatchRemoteReauthFailure } from '
 import { detectRemoteDisplay, isWindowsBinaryPathInWsl, isWslEnvironment } from './bootstrap-platform'
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
-import { needsRematerialization, resolvePayload } from './bundled-runtime'
+import { latestReleaseFromLsRemote, needsRematerialization, resolveChannel, resolvePayload } from './bundled-runtime'
 import {
   adoptionManifest,
   decideAdoption,
@@ -2483,12 +2483,86 @@ async function resolveHealedBranch(updateRoot, branch) {
   return 'main'
 }
 
+/**
+ * Update check for a source checkout on the stable channel: how many
+ * releases is the checkout behind, not how many commits behind main.
+ * The apply path stays `hermes update` (which resolves the stable channel
+ * itself and fast-forwards to the tag).
+ */
+async function checkStableChannelUpdates() {
+  const updateRoot = resolveUpdateRoot()
+
+  if (!directoryExists(path.join(updateRoot, '.git'))) {
+    return {
+      supported: false,
+      reason: 'not-a-git-checkout',
+      message: `${updateRoot} isn't a git checkout — desktop self-update only runs against a source install.`,
+      hermesRoot: updateRoot,
+      channel: 'stable'
+    }
+  }
+
+  const [tags, currentSha, dirtyStr] = await Promise.all([
+    runGit(['ls-remote', '--tags', OFFICIAL_REPO_HTTPS_URL, 'v*'], { cwd: updateRoot }),
+    runGit(['rev-parse', 'HEAD'], { cwd: updateRoot }).then(r => r.stdout.trim()),
+    runGit(['status', '--porcelain'], { cwd: updateRoot }).then(r => r.stdout.trim())
+  ])
+
+  if (tags.code !== 0) {
+    return {
+      supported: true,
+      channel: 'stable',
+      error: 'fetch-failed',
+      message: firstLine(tags.stderr) || 'git ls-remote --tags failed.',
+      hermesRoot: updateRoot,
+      fetchedAt: Date.now()
+    }
+  }
+
+  const latest = latestReleaseFromLsRemote(tags.stdout)
+
+  if (!latest) {
+    return {
+      supported: true,
+      channel: 'stable',
+      error: 'no-release-tags',
+      message: 'No final release tag (vX.Y.Z) exists on the remote yet.',
+      hermesRoot: updateRoot,
+      fetchedAt: Date.now()
+    }
+  }
+
+  // behind is release-granular on this channel: 0 = on the latest release,
+  // 1 = a newer release exists. The renderer shows the tag, not a count.
+  return {
+    supported: true,
+    channel: 'stable',
+    branch: null,
+    behind: currentSha === latest.sha ? 0 : 1,
+    currentSha,
+    targetSha: latest.sha,
+    latestTag: latest.tag,
+    commits: [],
+    dirty: dirtyStr.length > 0,
+    hermesRoot: updateRoot,
+    fetchedAt: Date.now()
+  }
+}
+
 async function checkUpdates() {
   // Bundled installs update through the app updater (GitHub Releases feed),
   // not through git. The gate reads the install manifest, so an ejected
-  // checkout falls through to the git path below.
+  // checkout falls through to the git paths below.
   if (bundledUpdaterActive()) {
     return checkAppUpdate(app.getVersion())
+  }
+
+  // Source install on the stable channel (an ejected bundled install, or a
+  // manual channel switch): compare against the newest release tag, not
+  // against the tip of main. A commits-behind-main count is meaningless
+  // vocabulary on this channel and reads as an alarming +N.
+  if (resolveChannel(readJson(INSTALL_MANIFEST_PATH) as any) === 'stable') {
+    return checkStableChannelUpdates()
   }
 
   const updateRoot = resolveUpdateRoot()

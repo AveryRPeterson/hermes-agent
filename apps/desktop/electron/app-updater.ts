@@ -45,8 +45,10 @@ export function describeFeedCheck(
 ): {
   supported: true
   mechanism: 'app-updater'
+  channel: 'stable'
   currentVersion: string
   latestVersion: string | null
+  latestTag: string | null
   updateAvailable: boolean
   fetchedAt: number
 } {
@@ -55,8 +57,13 @@ export function describeFeedCheck(
   return {
     supported: true,
     mechanism: 'app-updater',
+    // Bundled installs are locked to the stable channel; saying so here
+    // lets every renderer surface pick release vocabulary without a
+    // separate probe of the install manifest.
+    channel: 'stable',
     currentVersion: current,
     latestVersion: latest,
+    latestTag: latest ? `v${latest}` : null,
     updateAvailable: latest !== null && latest !== current,
     fetchedAt: Date.now()
   }

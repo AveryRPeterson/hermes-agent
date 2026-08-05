@@ -9,8 +9,10 @@ import {
   executeAdoptionCheckout,
   gatherGitFacts,
   type GitRunner,
+  latestReleaseFromLsRemote,
   needsRematerialization,
   payloadArgs,
+  resolveChannel,
   resolvePayload
 } from '../electron/bundled-runtime'
 
@@ -255,4 +257,47 @@ test('adoption executes exactly one checkout -B main at the tag commit', () => {
 
   const failing = fakeGit({ 'checkout -B main': { code: 1, stdout: '' } })
   assert.equal(executeAdoptionCheckout('/root', 'v2.0.0', failing), false)
+})
+
+// ── resolveChannel ──────────────────────────────────────────────────
+
+test('channel: bundled is always stable, source carries its own, absent means main', () => {
+  assert.equal(resolveChannel({ installMode: 'bundled', channel: 'main' }), 'stable')
+  assert.equal(resolveChannel({ installMode: 'source', channel: 'stable' }), 'stable')
+  assert.equal(resolveChannel({ installMode: 'source', channel: 'main' }), 'main')
+  assert.equal(resolveChannel(null), 'main')
+  assert.equal(resolveChannel({}), 'main')
+})
+
+// ── latestReleaseFromLsRemote ───────────────────────────────────────
+
+test('release picking is numeric, skips prereleases, prefers peeled shas', () => {
+  const output = [
+    `${'a'.repeat(40)}\trefs/tags/v0.9.0`,
+    `${'b'.repeat(40)}\trefs/tags/v0.10.0`,
+    `${'c'.repeat(40)}\trefs/tags/v0.10.0^{}`,
+    `${'d'.repeat(40)}\trefs/tags/v0.11.0-rc1`,
+    `${'e'.repeat(40)}\trefs/tags/v2026.7.20`
+  ].join('\n')
+
+  const latest = latestReleaseFromLsRemote(output)
+
+  // v0.10.0 beats v0.9.0 numerically (a lexicographic sort would invert
+  // it), the rc prerelease is skipped, and the CalVer tag is excluded by
+  // the three-digit major cap — otherwise 2026 would beat every SemVer
+  // release forever.
+  assert.equal(latest?.tag, 'v0.10.0')
+  assert.equal(latest?.sha, 'c'.repeat(40))
+
+  const semverOnly = latestReleaseFromLsRemote(
+    [`${'a'.repeat(40)}\trefs/tags/v0.9.0`, `${'b'.repeat(40)}\trefs/tags/v0.10.0`, `${'c'.repeat(40)}\trefs/tags/v0.10.0^{}`].join('\n')
+  )
+
+  assert.equal(semverOnly?.tag, 'v0.10.0')
+  assert.equal(semverOnly?.sha, 'c'.repeat(40))
+})
+
+test('release picking returns null when no final release tag exists', () => {
+  assert.equal(latestReleaseFromLsRemote(''), null)
+  assert.equal(latestReleaseFromLsRemote(`${'d'.repeat(40)}\trefs/tags/v1.0.0-beta.2`), null)
 })

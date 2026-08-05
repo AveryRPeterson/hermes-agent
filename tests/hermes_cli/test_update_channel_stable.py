@@ -19,6 +19,18 @@ class TestParseReleaseTag:
         for tag in ("v1.2.3-rc1", "v1.2.3-beta.1", "v1.2", "1.2.3", "release-1", "vv1.2.3", ""):
             assert _parse_release_tag(tag) is None, tag
 
+    def test_calver_tags_rejected(self):
+        """Historical CalVer tags (v2026.7.20) must not win a numeric sort.
+
+        The major component is capped at three digits, the same rule as
+        _SEMVER_TAG_RE in scripts/write_install_stamp.py and
+        latestReleaseFromLsRemote in apps/desktop. A four-digit year would
+        rank above every SemVer release forever.
+        """
+        assert _parse_release_tag("v2026.7.20") is None
+        assert _parse_release_tag("v1000.0.0") is None
+        assert _parse_release_tag("v999.0.0") == (999, 0, 0)
+
     def test_numeric_ordering_not_lexicographic(self):
         """v0.10.0 must sort above v0.9.0 — the whole point of tuple parsing."""
         newer, older = _parse_release_tag("v0.10.0"), _parse_release_tag("v0.9.0")
