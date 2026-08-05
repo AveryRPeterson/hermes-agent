@@ -2,20 +2,13 @@
 Lazy dependency installer for opt-in Hermes Agent backends.
 
 Many Hermes features (Mistral TTS, ElevenLabs TTS, Honcho memory, Bedrock,
-Slack, Matrix, etc.) require Python packages that not every user needs. The
-historical approach was to bundle them all under ``pyproject.toml`` extras
-(``hermes-agent[all]``) and install them eagerly at setup time. That has
-two problems:
+Slack, Matrix, etc.) need Python packages that not every user wants. Each
+one installs at first use, for two reasons. One quarantined or yanked
+release on PyPI must not fail the whole resolve and cost a fresh install
+ten unrelated extras. And a user who talks to one provider must not pull
+hundreds of packages that they never import.
 
-1. **Fragility.** When one extra's transitive dependency becomes
-   unavailable on PyPI (quarantined for malware, yanked, broken upload),
-   the *entire* ``[all]`` resolve fails and fresh installs silently fall
-   back to a stripped tier — losing 10+ unrelated extras at once.
-
-2. **Bloat.** A user who only ever talks to one provider pulls hundreds
-   of packages they will never import.
-
-The lazy-install pattern fixes both. Backends call :func:`ensure` at the
+Backends call :func:`ensure` at the
 top of their first-import path. If the deps are missing, ``ensure`` checks
 the ``security.allow_lazy_installs`` config flag (default true) and runs
 a venv-scoped pip install. If the user has explicitly disabled lazy
@@ -162,12 +155,9 @@ LAZY_DEPS: dict[str, str] = {
     "skill.youtube": "youtube",
 
     # ─── Tools ─────────────────────────────────────────────────────────────
-    # NOTE: no "tool.acp" entry. [acp] ships eagerly in [all] and nothing ever
-    # called ensure("tool.acp"), so the mapping was dead — and it put [acp] in
-    # both [all] and the lazy map, which the lazy-install policy forbids
-    # (test_lazy_installable_extras_excluded_from_all). Removed rather than
-    # dropping [acp] from [all]: the ACP entry point is a console script, so
-    # its dep must be present before the agent loop can lazy-install anything.
+    # [acp] has no entry here on purpose. The ACP entry point is a console
+    # script, so its dependency must exist before the agent loop starts. It
+    # ships in [all] instead, and an extra cannot be in both.
     "tool.dashboard": "web",
     "tool.computer_use": "computer-use",
     "tool.trace_upload": "trace-upload",
@@ -185,7 +175,7 @@ def _project_root() -> Optional[Path]:
     Hermes supports two install types. ``install.sh`` clones the repository,
     and the Docker image copies ``pyproject.toml`` and ``uv.lock`` to its
     WORKDIR. Each other layout, such as a copy in site-packages, has no
-    project root. Hermes then uses the fallback list of specs.
+    project root. feature_specs() then raises FeatureUnavailable.
     """
     root = Path(__file__).resolve().parent.parent
     return root if (root / "pyproject.toml").is_file() else None
@@ -1093,8 +1083,6 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
         if managed_by:
             raise FeatureUnavailable(
                 feature, missing,
-                # Prefix "unsupported " on purpose: refresh_active_features
-                # reads that prefix to tell a skip from a hard failure.
                 "unsupported on a managed install: "
                 + _managed_install_reason(feature, LAZY_DEPS.get(feature)),
                 # The store is read-only. A `uv pip install` hint here
@@ -1406,7 +1394,7 @@ def ensure_and_bind(
     """
     try:
         ensure(feature, prompt=prompt)
-    except (FeatureUnavailable, Exception):
+    except Exception:
         return False
 
     try:
