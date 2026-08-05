@@ -49,6 +49,14 @@ import { shouldLatchBackendStartFailure, shouldLatchRemoteReauthFailure } from '
 import { detectRemoteDisplay, isWindowsBinaryPathInWsl, isWslEnvironment } from './bootstrap-platform'
 import { decideBootstrapRepair } from './bootstrap-repair-guard'
 import { runBootstrap } from './bootstrap-runner'
+import { needsRematerialization, resolvePayload } from './bundled-runtime'
+import {
+  adoptionManifest,
+  decideAdoption,
+  executeAdoptionCheckout,
+  gatherGitFacts,
+  type GitRunner
+} from './bundled-runtime'
 import { applyConnectionChange, resolveTerminalConnection } from './connection-apply'
 import {
   authModeFromStatus,
@@ -3613,6 +3621,102 @@ function readBootstrapMarker() {
   return readJson(BOOTSTRAP_COMPLETE_MARKER)
 }
 
+// ─── Silent adoption of pristine legacy checkouts (plan §1.4) ───────────────
+//
+// Runs once per launch, BEFORE backend resolution reads the marker/manifest:
+// a bundled build meeting a pristine legacy checkout (no install manifest,
+// clean tree, on main, HEAD an ancestor of the payload tag) fast-forwards it
+// to the release tag and marks it bundled/auto-adopted. Every ambiguous
+// input skips silently — failure to adopt just means the checkout keeps
+// booting through the legacy path, and we retry at a future launch/release.
+// Runs at launch (fresh process, backend not yet spawned) and NEVER inside
+// `hermes update` — the update process executes post-pull steps from
+// pre-pull modules, so it only ever stages; fresh processes apply.
+
+const INSTALL_MANIFEST_PATH = path.join(ACTIVE_HERMES_ROOT, '.hermes-install.json')
+
+const adoptionGitRunner: GitRunner = (args, cwd) => {
+  try {
+    const stdout = execFileSync('git', ['-c', 'windows.appendAtomically=false', ...args], {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      timeout: 120_000,
+      ...hiddenWindowsChildOptions()
+    })
+
+    return { code: 0, stdout: String(stdout) }
+  } catch (err: any) {
+    return { code: typeof err?.status === 'number' ? err.status : -1, stdout: String(err?.stdout || '') }
+  }
+}
+
+/** Days since the checkout's last fetch (FETCH_HEAD mtime) — conservative
+ * proxy for "someone is actively running hermes update here". null = never. */
+function daysSinceLastFetch(activeRoot: string): number | null {
+  try {
+    const st = fs.statSync(path.join(activeRoot, '.git', 'FETCH_HEAD'))
+
+    return (Date.now() - st.mtimeMs) / 86_400_000
+  } catch {
+    return null
+  }
+}
+
+function maybeAutoAdopt() {
+  try {
+    const stamp = INSTALL_STAMP as any
+
+    // Thin builds can never adopt — skip before spawning any git probes
+    // (this is every dev run and every current CI build).
+    if (stamp?.payload !== true || !stamp?.tag) {
+      return false
+    }
+
+    const facts = {
+      stampHasPayload: stamp?.payload === true,
+      stampTag: stamp?.tag || null,
+      installManifest: readJson(INSTALL_MANIFEST_PATH),
+      recentManualUpdateDays: daysSinceLastFetch(ACTIVE_HERMES_ROOT),
+      ...gatherGitFacts(ACTIVE_HERMES_ROOT, stamp?.tag || '', adoptionGitRunner)
+    }
+
+    const decision = decideAdoption(facts)
+
+    if (!decision.adopt) {
+      if (facts.stampHasPayload) {
+        rememberLog(`[adopt] not adopting: ${(decision as any).reason}`)
+      }
+
+      return false
+    }
+
+    rememberLog(`[adopt] pristine legacy checkout — fast-forwarding to ${stamp.tag} (reflog is the undo)`)
+
+    if (!executeAdoptionCheckout(ACTIVE_HERMES_ROOT, stamp.tag, adoptionGitRunner)) {
+      rememberLog('[adopt] checkout failed; staying in source mode')
+
+      return false
+    }
+
+    writeFileAtomic(
+      INSTALL_MANIFEST_PATH,
+      JSON.stringify(adoptionManifest(stamp.tag), null, 2) + '\n',
+      'utf8'
+    )
+    // Do NOT touch the bootstrap marker here: its pinnedTag still names the
+    // previous materialization, so needsRematerialization() now fires and the
+    // normal bootstrap path re-materializes venv/js offline from payloads.
+    rememberLog('[adopt] adopted into the bundled path (manageStyle: auto-adopted)')
+
+    return true
+  } catch (err: any) {
+    rememberLog(`[adopt] error (staying source): ${err?.message || err}`)
+
+    return false
+  }
+}
+
 // Marker-independent: is the canonical install at ACTIVE_HERMES_ROOT actually
 // runnable right now? A complete CLI install (`install.sh --include-desktop`)
 // or a DMG launch over a prior CLI install satisfies this WITHOUT the desktop
@@ -3648,6 +3752,10 @@ function writeBootstrapMarker(payload) {
     schemaVersion: BOOTSTRAP_MARKER_SCHEMA_VERSION,
     pinnedCommit: payload.pinnedCommit || null,
     pinnedBranch: payload.pinnedBranch || null,
+    // Bundled builds: which payload tag this bootstrap materialized (null on
+    // thin/network bootstraps). Compared against the stamp tag at launch to
+    // trigger offline re-materialization after an app update.
+    pinnedTag: payload.pinnedTag || null,
     completedAt: new Date().toISOString(),
     desktopVersion: app.getVersion()
   }
@@ -3874,6 +3982,14 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs) {
+  // 0. Bundled builds: consider silently adopting a pristine legacy checkout
+  //    into the bundled path (plan §1.4). Must run before anything below
+  //    reads the marker / install manifest — adoption rewrites both. No-op
+  //    on thin builds and every non-pristine checkout; a successful adoption
+  //    leaves the marker's pinnedTag stale on purpose so the
+  //    re-materialization branch below re-runs the (now offline) bootstrap.
+  maybeAutoAdopt()
+
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
   //    checkout. Honour it as-is (no bootstrap; the user is driving).
   const overrideRoot = process.env.HERMES_DESKTOP_HERMES_ROOT && path.resolve(process.env.HERMES_DESKTOP_HERMES_ROOT)
@@ -3908,7 +4024,29 @@ function resolveHermesBackend(backendArgs) {
   //    bootstrap when the runtime itself is unusable.
   const activeRuntime = activeRuntimeState()
 
-  if (activeRuntime.shouldUseActiveRuntime && !bootstrapRepairRequested) {
+  // Bundled builds: if the app updated (stamp tag ≠ marker pinnedTag), the
+  // runtime on disk was materialized from the PREVIOUS release's payloads.
+  // Re-run the bootstrap — it sources offline from the new payloads and the
+  // install.sh/ps1 repository stage refuses ejected (source-mode) checkouts,
+  // so a user-managed agent is never touched (needsRematerialization also
+  // short-circuits on installMode:source to skip the pointless re-run).
+  const rematerializationNeeded =
+    activeRuntime.shouldUseActiveRuntime &&
+    !bootstrapRepairRequested &&
+    needsRematerialization(
+      readBootstrapMarker(),
+      INSTALL_STAMP as any,
+      readJson(path.join(ACTIVE_HERMES_ROOT, '.hermes-install.json'))
+    )
+
+  if (rematerializationNeeded) {
+    rememberLog(
+      `[bootstrap] app updated to payload tag ${(INSTALL_STAMP as any).tag}; ` +
+        're-materializing the agent runtime offline from bundled payloads'
+    )
+  }
+
+  if (activeRuntime.shouldUseActiveRuntime && !bootstrapRepairRequested && !rematerializationNeeded) {
     if (!activeRuntime.hasValidMarker) {
       rememberLog(
         `[bootstrap] Active Hermes runtime at ${ACTIVE_HERMES_ROOT} is usable but the bootstrap marker is missing or stale; skipping first-run bootstrap.`
@@ -3927,7 +4065,9 @@ function resolveHermesBackend(backendArgs) {
   //    do NOT write a bootstrap marker; the user did this themselves and we
   //    don't want to take ownership of an install we didn't perform.
   //    HERMES_DESKTOP_IGNORE_EXISTING=1 forces the bootstrap path for testing.
-  if (process.env.HERMES_DESKTOP_IGNORE_EXISTING !== '1') {
+  //    Skipped when re-materialization is pending: the PATH hermes typically
+  //    points into the very ACTIVE_HERMES_ROOT venv we're about to refresh.
+  if (process.env.HERMES_DESKTOP_IGNORE_EXISTING !== '1' && !rematerializationNeeded) {
     let hermesCommand = null
     const hermesOverride = process.env.HERMES_DESKTOP_HERMES
 
@@ -3998,7 +4138,7 @@ function resolveHermesBackend(backendArgs) {
   // 5. Last-ditch: pip-installed hermes_cli module via system Python.
   //    Same rationale as #4 -- the user installed this; we use it but don't
   //    take ownership.
-  const python = findSystemPython()
+  const python = rematerializationNeeded ? null : findSystemPython()
 
   if (python) {
     // Same smoke-test rationale as step 4: a system Python in the
@@ -4110,6 +4250,10 @@ async function ensureRuntime(backend) {
       hermesHome: HERMES_HOME,
       logRoot: path.join(HERMES_HOME, 'logs'),
       abortSignal: bootstrapAbortController.signal,
+      // Bundled builds carry an agent-payload tree in resources; the install
+      // stages source from it offline (per-item fallback to network). Thin
+      // builds resolve null and bootstrap exactly as before.
+      payloadDir: (resolvePayload(process.resourcesPath) || ({} as any)).dir || null,
       onEvent: ev => {
         // Tee every bootstrap event to (a) the desktop log for forensics
         // and (b) the renderer for live progress UI. Either may be absent;
