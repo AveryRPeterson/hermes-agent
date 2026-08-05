@@ -56,21 +56,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # electron-builder targets are chosen by the shared script from
+          # the runner platform: linux AppImage, mac dmg+zip, win nsis.
           - label: linux-x64
             runner: ubuntu-24.04
-            builder_args: --linux AppImage
           - label: linux-arm64
             runner: ubuntu-24.04-arm
-            builder_args: --linux AppImage
           - label: darwin-arm64
             runner: macos-15
-            builder_args: --mac dmg zip
           - label: darwin-x64
             runner: macos-15-intel
-            builder_args: --mac dmg zip
           - label: win32-x64
             runner: windows-2025
-            builder_args: --win nsis
     env:
       # This is the one switch that turns on the whole bundled stack.
       HERMES_DESKTOP_BUNDLED: '1'
@@ -124,58 +121,16 @@ jobs:
             pyproject.toml
             uv.lock
 
-      # ── Prebuild the JS surfaces that ride in the payload ─────────────
-      # These are ui-tui (with hermes-ink) and the dashboard SPA. The build
-      # runs here, and stage-agent-payloads makes the tarball. The first
-      # launch on the user machine never runs npm.
-      - name: Build TUI
-        uses: ./.github/actions/retry
-        with:
-          command: npm run build --prefix ui-tui
-
-      - name: Build dashboard SPA
-        uses: ./.github/actions/retry
-        with:
-          command: npm run build --prefix web
-
-      # ── Node dist for the payload (the runtime the AGENT uses, not the CI node)
-      - name: Stage node dist for payload
-        shell: bash
-        run: |
-          # The payload ships the same node major that install.sh pins for
-          # users (NODE_VERSION=22), not the workflow's node 26.
-          NODE_MAJOR=22
-          VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | node -e '
-            let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
-              const v=JSON.parse(d).find(e=>e.version.startsWith("v'"$NODE_MAJOR"'."));
-              if(!v)process.exit(1);console.log(v.version)})')
-          case "${{ matrix.label }}" in
-            linux-x64)    DIST="node-$VERSION-linux-x64.tar.xz" ;;
-            linux-arm64)  DIST="node-$VERSION-linux-arm64.tar.xz" ;;
-            darwin-x64)   DIST="node-$VERSION-darwin-x64.tar.gz" ;;
-            darwin-arm64) DIST="node-$VERSION-darwin-arm64.tar.gz" ;;
-            win32-x64)    DIST="node-$VERSION-win-x64.zip" ;;
-          esac
-          mkdir -p /tmp/node-payload /tmp/node-extract
-          curl -fsSL "https://nodejs.org/dist/$VERSION/$DIST" -o "/tmp/$DIST"
-          # bsdtar (Windows tar.exe) also reads .zip, so one extraction path
-          # covers all three archive shapes. Unpack the archive. Then move
-          # the contents of the single top-level node-vX.Y.Z-* directory up.
-          tar -xf "/tmp/$DIST" -C /tmp/node-extract
-          mv /tmp/node-extract/*/* /tmp/node-payload/
-          test -x /tmp/node-payload/bin/node || test -x /tmp/node-payload/node.exe
-          echo "HERMES_PAYLOAD_NODE_DIST=/tmp/node-payload" >> "$GITHUB_ENV"
-
-      # ── Build + package the desktop app with payloads ──────────────────
-      # npm run build runs write-build-stamp, which fails hard when
-      # HERMES_DESKTOP_BUNDLED=1 is set without HERMES_PAYLOAD_TAG. It also
-      # runs stage-agent-payloads: the repo clone at the tag, uv plus python,
-      # the wheelhouse via `uvx pip wheel --only-binary=:all:`, the node
-      # dist, and the js tarball.
+      # ── Build + package through the shared script ──────────────────────
+      # scripts/build-bundled-desktop.mjs owns the whole sequence: the JS
+      # surface builds, the payload node dist, the bundled desktop build,
+      # and electron-builder. Run the same script locally to reproduce a
+      # CI build. The workflow adds only caching, signing, and upload.
+      # npm ci already ran above, so pass --no-install.
       - name: Build and package
-        working-directory: apps/desktop
         shell: bash
         env:
+          HERMES_BUNDLE_TAG: ${{ env.HERMES_PAYLOAD_TAG }}
           # macOS signing and notarization. Forks do not have the secrets.
           # notarize.mjs and electron-builder both skip without them.
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
@@ -189,15 +144,14 @@ jobs:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
-          # Non-secret Azure signing parameters. Set these three repo
-          # variables to turn Windows signing on. Without them the build
-          # stays unsigned, so forks and dry runs continue to work.
+          # Non-secret Azure signing parameters. Set these repo variables to
+          # turn Windows signing on. Without them the build stays unsigned,
+          # so forks and dry runs continue to work.
           AZURE_SIGN_ENDPOINT: ${{ vars.AZURE_SIGN_ENDPOINT }}
           AZURE_SIGN_ACCOUNT: ${{ vars.AZURE_SIGN_ACCOUNT }}
           AZURE_SIGN_PROFILE: ${{ vars.AZURE_SIGN_PROFILE }}
           AZURE_SIGN_PUBLISHER: ${{ vars.AZURE_SIGN_PUBLISHER }}
         run: |
-          npm run build
           SIGN_ARGS=()
           if [ "${{ matrix.label }}" = "win32-x64" ] && [ -n "$AZURE_SIGN_ENDPOINT" ] && [ -n "$AZURE_CLIENT_SECRET" ]; then
             echo "Windows signing: Azure Trusted Signing at $AZURE_SIGN_ENDPOINT"
@@ -210,7 +164,7 @@ jobs:
               "-c.win.sign.publisherName=$AZURE_SIGN_PUBLISHER"
             )
           fi
-          npm run builder -- ${{ matrix.builder_args }} "${SIGN_ARGS[@]}"
+          node scripts/build-bundled-desktop.mjs --tag="$HERMES_BUNDLE_TAG" --no-install -- "${SIGN_ARGS[@]}"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
