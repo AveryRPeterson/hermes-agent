@@ -230,42 +230,64 @@ RUN cd plugins/platforms/photon/sidecar && \
 # frontend stats the readme path during dep resolution, so we `touch` an
 # empty placeholder — the real README is restored by `COPY . .` below.
 #
-# `uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp`
-# installs the deps reachable through the composite `[all]` extra
-# (handpicked set intended for the production image — excludes `[dev]`),
-# plus gateway messaging adapters that should work in the published image
-# without a first-boot lazy install.  We do NOT use `--all-extras`:
-# that would pull `[dev]` (pytest/ruff/ty/debugpy — test tooling has no
-# place in a production image), `[termux-all]` (Android redundancy), and
-# the heavy optional stacks `[voice]`/`[wake]` (faster-whisper, onnxruntime,
-# sounddevice, numpy) that most deployments never touch.
+# Dependency install: `--all-extras` MINUS the extras that cannot work in a
+# container. Lazy installs are DISABLED outright in this image (see
+# HERMES_DISABLE_LAZY_INSTALLS below), so everything reachable at runtime must
+# be baked in here. A missing backend is a build-time bug, not something the
+# container repairs at first use by reaching out to PyPI (often blocked in
+# containerized envs anyway).
 #
-# Provider packages (anthropic, bedrock, azure-identity) are included
-# so Docker users can use these providers without requiring runtime
-# lazy-install access to PyPI (often blocked in containerized envs).
+# Use `--all-extras --no-extra ...`. Do not use a list of `--extra` flags:
+# such a list omits each extra that a later commit adds, and the image then
+# has no way to install it.
 #
-# The [otlp] extra contains the SDK/exporter imported by Hermes when Gateway
-# Health export is enabled. Collector and observability-backend dependencies
-# remain external and are not part of the Hermes production image.
+# Exclusions, each for a physical reason:
 #
-# The hindsight memory provider's client (hindsight-client) is baked in
-# for the same reason: it lazy-installs into /opt/hermes/.venv at first
-# use, which lives inside the (immutable) image layer rather than the
-# mounted /opt/data volume, so it is lost on every container recreate /
-# image update and recall/retain then fails with
-# `ModuleNotFoundError: No module named 'hindsight_client'` (#38128).
+#   voice, wake, wake-openwakeword, wake-sherpa, wake-porcupine, wake-tflite
+#       Local-microphone features. `sounddevice` is a CFFI binding to
+#       libportaudio2, which this image does not install, and a container has
+#       no /dev/snd — `import sounddevice` raises OSError. They also make no
+#       sense on a gateway server: there is no microphone behind a webhook.
+#       ~500MB of ML runtime (ctranslate2, scipy, sklearn, av, onnxruntime,
+#       ai-edge-litert) that could never execute.
 #
-# The Matrix gateway's deps ([matrix] extra) are baked in because
-# python-olm (transitive via mautrix[encryption]) builds from source on
-# Python/image combinations without usable wheels.  The Docker image is
-# Linux-only, so keeping the native libolm/build-toolchain packages here
-# avoids the cross-platform failures that kept [matrix] out of [all]
-# while still making Matrix work in the published container. Fixes #30399.
+#   dev  Test tooling (pytest/ruff/ty/debugpy) has no place in a production
+#        image.
+#
+#   termux-all  Android/Termux redundancy; composes extras already included.
+#
+# NOTE: [silk] IS included despite being audio-adjacent. `pilk` is a pure
+# SILK-v3 *codec* (1.2MB, no PortAudio): it decodes voice-note bytes that
+# arrived over the network from WeChat / WeCom / QQ Bot, all of which are
+# gateway platforms this image serves. It builds from an sdist — there is no
+# Linux wheel — which the gcc/g++/make/python3-dev packages above cover.
+#
+# Everything else is baked deliberately:
+#   * Providers (anthropic, bedrock, azure-identity, vertex) so users aren't
+#     blocked on PyPI egress just to switch model backend.
+#   * [otlp] — the SDK/exporter imported when Gateway Health export is on.
+#     Collector and observability backends remain external.
+#   * [hindsight] — an install at run time goes to /opt/hermes/.venv, which
+#     is in the image layer and not on the /opt/data volume. Each container
+#     recreate then removes it, and recall and retain fail with
+#     `ModuleNotFoundError: hindsight_client` (#38128).
+#   * [matrix] — python-olm (via mautrix[encryption]) builds from source where
+#     no wheel exists. This image is Linux-only and already carries libolm +
+#     the build toolchain, so Matrix works here even though the cross-platform
+#     failures keep [matrix] out of [all]. Fixes #30399.
 #
 # The editable link is created after the source copy below.
 COPY pyproject.toml uv.lock ./
 RUN touch ./README.md
-RUN uv sync --frozen --no-install-project --extra all --extra messaging --extra otlp --extra anthropic --extra bedrock --extra azure-identity --extra hindsight --extra matrix
+RUN uv sync --frozen --no-install-project --all-extras \
+      --no-extra dev \
+      --no-extra termux-all \
+      --no-extra voice \
+      --no-extra wake \
+      --no-extra wake-openwakeword \
+      --no-extra wake-sherpa \
+      --no-extra wake-porcupine \
+      --no-extra wake-tflite
 
 # ---------- Frontend build (cached independently from Python source) ----------
 # Copy only the frontend source trees first so that Python-only changes don't
@@ -378,20 +400,28 @@ ENV HERMES_WEB_DIST=/opt/hermes/hermes_cli/web_dist
 ENV HERMES_TUI_DIR=/opt/hermes/ui-tui
 ENV HERMES_HOME=/opt/data
 ENV HERMES_WRITE_SAFE_ROOT=/opt/data
-ENV HERMES_DISABLE_LAZY_INSTALLS=1
 # The published image seals /opt/hermes (root-owned, read-only) so a runtime
-# lazy install can't mutate the agent's own venv and brick it. But opt-in
-# backends (Firecrawl web search, Exa, Feishu, …) keep their SDKs in
-# tools/lazy_deps.py — deliberately NOT baked into [all] (see pyproject.toml
-# policy 2026-05-12: one quarantined release must not break every install).
-# Redirect those lazy installs to a writable dir on the durable data volume.
-# lazy_deps appends this dir to the END of sys.path, so a package installed
-# here can only ADD modules — it can never shadow or downgrade a core module,
-# so the sealed-venv guarantee holds even with installs re-enabled. The dir
-# is seeded + chowned to the hermes user by docker/stage2-hook.sh and lives
-# on the /opt/data volume, so it persists across container recreates / image
-# updates (an ABI stamp invalidates it if a rebuild bumps the interpreter).
-ENV HERMES_LAZY_INSTALL_TARGET=/opt/data/lazy-packages
+# lazy install can't mutate the agent's own venv and brick it.
+#
+# This is now an ABSOLUTE seal, not a redirect. Every extra that can function
+# in a container is baked into the image (see the `uv sync --all-extras`
+# above), so a lazy install firing here means the image is missing something
+# it should have shipped — a build-time bug. Failing loudly surfaces that;
+# silently reaching out to PyPI hid it, and produced raw pip resolution errors
+# in the user's face when egress was blocked (the common container case).
+#
+# Do not set HERMES_LAZY_INSTALL_TARGET here. That variable sends installs to
+# a writable directory on /opt/data and thus permits them again. The image
+# contains each extra that a container can run, so the variable has no
+# correct use here, and it lets the container run a dependency that no
+# scanner examined.
+#
+# A volume from an earlier image can still hold packages under
+# /opt/data/lazy-packages. Nothing imports them now. This removes no
+# function: the image contains each extra, and the two plugin dependencies
+# that are not extras (httpx, requests) are core dependencies. You can
+# delete that directory.
+ENV HERMES_DISABLE_LAZY_INSTALLS=1
 
 # `docker exec` privilege-drop shim. When operators run
 # `docker exec <c> hermes ...` they default to root, and any file the

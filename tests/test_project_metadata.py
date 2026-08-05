@@ -55,11 +55,11 @@ def test_lazy_installable_extras_excluded_from_all():
     If you're tempted to add an opt-in backend to [all] for "convenience," map
     it in ``LAZY_FEATURES`` instead so it installs at first use.
 
-    The set of lazy extras is DERIVED from ``LAZY_FEATURES`` rather than
-    mirrored by hand: the old hardcoded list had to be updated separately from
-    the code it described, so a new backend could be added to both the lazy map
-    and [all] with this test still passing (``[acp]`` and ``[google]`` had both
-    silently drifted into exactly that state).
+    This test READS the set of lazy extras from ``LAZY_FEATURES``. Do not
+    write that set out again here. A list written by hand needs its own
+    update each time the map changes, so a new backend can enter both the
+    map and [all] and this test still passes. ``[acp]`` and ``[google]``
+    each reached that state.
 
     A small set of extras is deliberately in both, per the [all] policy comment
     in pyproject.toml — "things needed before the agent loop is alive" and
@@ -114,7 +114,7 @@ def _exact_pins(specs):
 def test_pyproject_pins_match_lazy_deps_pins():
     """Lazy installs must resolve the same pins pyproject declares.
 
-    Originally (#31817) this compared two hand-maintained pin tables:
+    Guard for #31817. That issue compared two lists of pins written by hand:
     ``tools/lazy_deps.py`` kept its own copy of every spec, and drift between
     the copies meant ``hermes update`` could downgrade a package below the
     security-current lazy pin. ``lazy_deps`` now READS the pyproject extras

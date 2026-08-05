@@ -193,51 +193,39 @@ class TestSupermemoryIsAvailable:
 # ---------------------------------------------------------------------------
 
 
-class TestSealedVenvDurableTarget:
+class TestSealedVenvBlocksInstalls:
+    """A sealed deployment (the Docker image) refuses runtime installs.
+
+    The image contains each extra that a container can run, and this includes
+    these memory SDKs. An install at run time thus means that the image does
+    not have a dependency that it must ship. The block applies in each case.
+    A HERMES_LAZY_INSTALL_TARGET left on an earlier volume must not permit
+    installs again.
+    """
+
     @pytest.mark.parametrize("feature", MEMORY_FEATURES)
-    def test_ensure_installs_into_durable_target_on_sealed_venv(
+    def test_sealed_venv_blocks_even_with_a_stale_target(
         self, feature, monkeypatch, tmp_path
     ):
-        # Sealed venv + durable target = the published Docker image config.
         monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
         monkeypatch.setenv("HERMES_LAZY_INSTALL_TARGET", str(tmp_path / "lazy"))
-        # config.yaml kill-switch left at default (allow).
         monkeypatch.setattr(
             "hermes_cli.config.load_config",
             lambda: {"security": {"allow_lazy_installs": True}},
         )
+        assert ld._allow_lazy_installs() is False
 
-        # Real gate must permit installs because a durable target is set.
-        assert ld._allow_lazy_installs() is True, (
-            "sealed venv WITH a durable target must allow installs — this is "
-            "the path honcho/hindsight use on hosted Fly instances"
+        monkeypatch.setattr(ld, "_is_satisfied", lambda spec: False)
+        monkeypatch.setattr(
+            ld, "_venv_pip_install",
+            lambda *a, **kw: pytest.fail("sealed deployment must not install"),
         )
-
-        # Drive ensure(): missing first, satisfied after the (stubbed) install.
-        states = iter([False, True])
-        monkeypatch.setattr(ld, "_is_satisfied", lambda spec: next(states))
-
-        captured = {}
-
-        def fake_install(specs, **kw):
-            captured["specs"] = specs
-            captured["target_env"] = os.environ.get("HERMES_LAZY_INSTALL_TARGET")
-            return ld._InstallResult(True, "ok", "")
-
-        monkeypatch.setattr(ld, "_venv_pip_install", fake_install)
-
-        ld.ensure(feature, prompt=False)  # must not raise
-
-        assert captured.get("specs") == ld.feature_specs(feature)
-        assert captured.get("target_env"), (
-            "install ran without the durable target env set"
-        )
+        with pytest.raises(ld.FeatureUnavailable) as exc:
+            ld.ensure(feature, prompt=False)
+        assert "HERMES_DISABLE_LAZY_INSTALLS" in str(exc.value)
 
     @pytest.mark.parametrize("feature", MEMORY_FEATURES)
     def test_sealed_venv_without_target_blocks(self, feature, monkeypatch):
-        # Sealed venv and NO durable target → installs blocked (can't mutate
-        # the sealed venv). Belt-and-suspenders: confirms the gate still
-        # protects the seal for these features.
         monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
         monkeypatch.delenv("HERMES_LAZY_INSTALL_TARGET", raising=False)
         monkeypatch.setattr(
@@ -246,5 +234,11 @@ class TestSealedVenvDurableTarget:
         )
         monkeypatch.setattr(ld, "_is_satisfied", lambda spec: False)
 
-        with pytest.raises(ld.FeatureUnavailable, match="lazy installs disabled"):
+        with pytest.raises(ld.FeatureUnavailable) as exc:
             ld.ensure(feature, prompt=False)
+        message = str(exc.value)
+        # Must name the real cause, not a config key the user never touched,
+        # and must not suggest pip-installing into a read-only venv.
+        assert "HERMES_DISABLE_LAZY_INSTALLS" in message
+        assert "allow_lazy_installs" not in message
+        assert "uv pip install" not in message

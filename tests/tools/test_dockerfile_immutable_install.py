@@ -62,36 +62,62 @@ def test_dockerfile_bakes_code_scoped_install_method_stamp() -> None:
     assert shim_block, "install-method stamp must be in the shim-wiring RUN block"
 
 
-def test_dockerfile_redirects_lazy_installs_to_durable_target() -> None:
-    """Immutable image seals the venv but redirects lazy installs to the
-    writable data volume, so opt-in backends still install at first use
-    without being able to break the sealed core.
+def test_dockerfile_seals_lazy_installs_with_no_redirect() -> None:
+    """The image must refuse installs at run time and set no target directory.
 
-    Guards the contract between the Dockerfile env var, the stage2-hook
-    seeding, and tools/lazy_deps.py — these three must agree on the path.
+    The build puts each extra that a container can run into the image, so an
+    install at run time means that the image does not have a dependency that
+    it must ship. A target directory permits such installs. It downloads a
+    package that no scanner examined, and it shows unedited pip errors when
+    the container cannot reach PyPI.
+
+    This test holds the Dockerfile, stage2-hook.sh and tools/lazy_deps.py to
+    one agreement: the image permits no install.
     """
     text = _dockerfile_text()
-    target = "/opt/data/lazy-packages"
 
-    # The redirect target must be set AND must live under the data volume,
-    # never under the immutable /opt/hermes tree.
-    assert f"ENV HERMES_LAZY_INSTALL_TARGET={target}" in text
-    assert target.startswith("/opt/data/"), "target must be on the durable volume"
-    assert "ENV HERMES_LAZY_INSTALL_TARGET=/opt/hermes" not in text
-
-    # The seal flag must still be present — the redirect rides on top of it,
-    # it does not replace it.
     assert "ENV HERMES_DISABLE_LAZY_INSTALLS=1" in text
-
-    # stage2-hook must seed + chown the target dir so first-use installs
-    # succeed as the unprivileged hermes runtime user.
-    stage2 = (REPO_ROOT / "docker" / "stage2-hook.sh").read_text()
-    assert '"$HERMES_HOME/lazy-packages"' in stage2, (
-        "stage2-hook.sh must create the lazy-packages dir on the data volume"
+    assert "ENV HERMES_LAZY_INSTALL_TARGET" not in text, (
+        "the durable-target redirect must not be re-introduced: with the full "
+        "extra set baked in it has no legitimate consumer, and it lets a "
+        "container resolve unaudited dependencies at runtime"
     )
-    assert "lazy-packages" in stage2.split("for sub in", 1)[1].split(";", 1)[0], (
-        "lazy-packages must be in the per-boot chown subdir list so it stays "
-        "hermes-owned"
+
+    # stage2-hook must not create or chown the target directory.
+    stage2 = (REPO_ROOT / "docker" / "stage2-hook.sh").read_text()
+    chown_list = stage2.split("for sub in", 1)[1].split(";", 1)[0]
+    assert "lazy-packages" not in chown_list, (
+        "lazy-packages is not an install target; remove it from the "
+        "chown list that runs at each boot"
+    )
+
+
+def test_dockerfile_bakes_every_container_capable_extra() -> None:
+    """The build must use --all-extras and remove only what cannot run here.
+
+    A list of `--extra` flags omits each backend that a later commit adds.
+    `--all-extras --no-extra ...` includes them. The image permits no install
+    at run time, so a missing extra is a feature that the user cannot reach.
+    """
+    text = _dockerfile_text()
+
+    assert "--all-extras" in text, (
+        "the dependency sync must use --all-extras so new extras are included "
+        "automatically"
+    )
+
+    # Excluded for a physical reason, each of which must stay excluded.
+    for extra in ("dev", "termux-all", "voice", "wake"):
+        assert f"--no-extra {extra}" in text, (
+            f"[{extra}] must stay excluded from the image"
+        )
+
+    # silk is audio-ADJACENT but container-valid: pilk is a pure SILK codec
+    # that decodes voice notes arriving over the network from WeChat / WeCom /
+    # QQ Bot. It must NOT be lumped in with the microphone extras.
+    assert "--no-extra silk" not in text, (
+        "[silk] decodes network-delivered voice notes for gateway platforms "
+        "this image serves — it needs no microphone and must be baked in"
     )
 
 

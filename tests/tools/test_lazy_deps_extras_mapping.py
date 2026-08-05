@@ -1,14 +1,16 @@
 """Every lazy feature must map to a real, resolvable pyproject extra.
 
-``tools/lazy_deps.py`` no longer carries its own copy of each backend's pins;
-it maps a feature name to a ``[project.optional-dependencies]`` extra and reads
-the specs from pyproject.toml. That removes the drift between the two tables,
-but introduces a new failure mode: a feature can point at an extra that doesn't
-exist (typo, or an extra renamed/removed without updating the map), which fails
-only at install time on whichever backend the user happens to enable.
+``tools/lazy_deps.py`` maps a feature name to a
+``[project.optional-dependencies]`` extra and reads the specs from
+pyproject.toml. It holds no copy of the pins.
 
-These are invariants about how the two sides must relate, not snapshots of
-their current contents — adding a backend should not require touching them.
+One fault is possible with this map: a feature can name an extra that does not
+exist. A spelling error does this, and so does a rename of an extra without a
+change to the map. Without these tests, that fault appears only when a user
+enables the backend and the install runs.
+
+Each test below states how the map and the extras must agree. No test copies
+their contents, so a new backend needs no change here.
 """
 
 from __future__ import annotations

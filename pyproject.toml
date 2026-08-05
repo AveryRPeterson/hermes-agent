@@ -182,9 +182,9 @@ hindsight = ["hindsight-client==0.6.1"]
 # from [mcp] so the CVE-2026-48710 floor is pinned in exactly one place.
 dev = ["hermes-agent[mcp]", "debugpy==1.8.20", "pytest==9.1.1", "pytest-asyncio==1.3.0", "ty==0.0.21", "ruff==0.15.10", "setuptools==83.0.0"]
 
-# Per-platform messaging extras. Each is the exact dependency set for one
-# gateway adapter, so tools/lazy_deps.py can install just the platform the
-# user enabled; `[messaging]` composes them for eager installs.
+# One extra for each messaging platform. Each holds the dependencies of one
+# gateway adapter, so tools/lazy_deps.py can install only the platform that
+# the user enabled. `[messaging]` contains them all, for an eager install.
 # aiohttp is pinned to the CVE-patched floor in every extra that pulls it
 # transitively — discord.py (aiohttp<4), slack-bolt and mautrix/aiohttp-socks
 # only cap it, so a vulnerable already-installed aiohttp would satisfy them.
@@ -207,9 +207,9 @@ matrix = ["mautrix[encryption]==0.21.0", "aiosqlite==0.22.1", "asyncpg==0.31.0",
 wecom = ["defusedxml==0.7.1"]
 cli = ["simple-term-menu==1.6.6"]
 tts-premium = ["elevenlabs==1.59.0"]
-# Shared audio I/O stack — mic capture for both local STT and the wake word.
-# Kept as its own extra so [voice] and the wake engines compose it instead of
-# each repeating the same two pins.
+# Audio input for local STT and for the wake word. This is a separate extra
+# so that [voice] and the wake engines can contain it. Do not repeat these
+# two pins in each of those extras.
 audio-io = [
   "sounddevice==0.5.5",
   "numpy==2.4.3",
@@ -226,10 +226,10 @@ voice = [
 # [wake]+[voice] so the ear works instantly; CLI-only installs lazy-install on
 # first /wake; mirrored in tools/lazy_deps.py.
 #
-# Each engine is its own extra so a lazy install pulls only the engine the
-# user picked (LAZY_DEPS maps wake.openwakeword / wake.sherpa /
-# wake.porcupine to these). `[wake]` composes them for eager installs that
-# want every engine available.
+# Each engine has its own extra, so a lazy install gets only the engine that
+# the user selected. LAZY_FEATURES in tools/lazy_deps.py maps
+# wake.openwakeword, wake.sherpa and wake.porcupine to these extras.
+# `[wake]` contains them all, for an install that wants each engine.
 wake-openwakeword = [
   "hermes-agent[audio-io]",
   "openwakeword==0.6.0",
@@ -263,13 +263,6 @@ honcho = ["honcho-ai==2.2.0"]
 # can't break fresh installs.
 supermemory = ["supermemory==3.50.0"]
 mem0 = ["mem0ai==2.0.10"]
-# Removed: the `vision` extra. Pillow is a core dependency (see the main
-# `dependencies` list above) because the byte/pixel image-shrink paths run on
-# the default vision-embed path. The extra survived b13ab0b9a as `vision = []`,
-# a no-op alias so `pip install hermes-agent[vision]` kept resolving — but pypi
-# installs are explicitly unsupported (see
-# website/docs/getting-started/platform-support.md), so it aliased nothing to
-# nothing and nothing in-tree referenced it.
 # Kept as a no-op back-compat alias — `ptyprocess` and `pywinpty` are now
 # in the main `dependencies` list (with the same platform markers), so
 # any existing requests for the `pty` extra resolve cleanly
@@ -311,10 +304,11 @@ mistral = ["mistralai==2.4.8"]
 # NOT in [all].
 otlp = ["opentelemetry-sdk==1.39.1", "opentelemetry-exporter-otlp-proto-http==1.39.1"]
 bedrock = ["boto3==1.42.89"]
-# Vertex AI provider — google-auth only (no API client). Kept separate from
-# [google] (the Workspace skill stack) so enabling the provider doesn't drag
-# in the whole Workspace SDK tree. pyasn1 carries the same fixed floor as
-# [google]: google-auth permits older vulnerable transitives.
+# Vertex AI provider. It needs google-auth and no API client. This extra is
+# separate from [google], the Workspace skill stack, so that the provider
+# does not install the full Workspace SDK. pyasn1 has the same patched
+# version as [google], because google-auth permits older versions with
+# known faults.
 vertex = ["google-auth==2.55.1", "pyasn1==0.6.4"]
 # SILK audio decode for WeChat/WeCom voice messages (stt.silk).
 silk = ["pilk==0.2.4"]
@@ -332,9 +326,9 @@ termux = [
 ]
 termux-all = [
   # Best-effort "install all" profile for Termux. Same policy as [all]:
-  # only includes extras that aren't covered by `tools/lazy_deps.py`.
-  # Backends like telegram/slack/dingtalk/feishu/honcho lazy-install at
-  # first use, so they're no longer eager-installed here.
+  # include only the extras that `tools/lazy_deps.py` does not map. A
+  # backend such as telegram, slack, dingtalk, feishu or honcho installs at
+  # first use, so this list must not name it.
   "hermes-agent[termux]",
   "hermes-agent[google]",
   "hermes-agent[homeassistant]",
@@ -361,14 +355,14 @@ google = [
   # httplib2 0.32.0 (GHSA-j5g9-f88f-gfj3 decompression bomb DoS).
   "httplib2==0.32.0",
 ]
-# Google Chat gateway adapter (plugins/platforms/google_chat). Composes
-# [google] for the shared API/auth stack and adds the Pub/Sub client used by
-# the optional pull-subscription transport.
+# Google Chat gateway adapter (plugins/platforms/google_chat). It contains
+# [google] for the API and auth stack, and adds the Pub/Sub client for the
+# optional pull-subscription transport.
 #
-# Declared here rather than only as a literal list inside the plugin so
-# google-cloud-pubsub lands in uv.lock — anything the plugin installs at
-# runtime but pyproject never declares is invisible to `uv audit` and the
-# OSV-Scanner CI job, which scan the lockfile.
+# Declare each of these packages here, not only in a list inside the plugin.
+# `uv audit` and the OSV-Scanner CI job read uv.lock. A package that the
+# plugin installs at run time, but that pyproject.toml does not declare,
+# never reaches uv.lock, and no scanner examines it.
 google-chat = [
   "hermes-agent[google]",
   "google-cloud-pubsub==2.39.0",

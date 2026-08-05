@@ -112,6 +112,7 @@ class TestSecurityGating:
         _register_fake_feature(monkeypatch, "test.feat", ("packageX>=1.0,<2",))
         monkeypatch.setattr(ld, "_is_satisfied", lambda spec: False)
         monkeypatch.setattr(ld, "_allow_lazy_installs", lambda: False)
+        monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
         with pytest.raises(ld.FeatureUnavailable, match="lazy installs disabled"):
             ld.ensure("test.feat", prompt=False)
 

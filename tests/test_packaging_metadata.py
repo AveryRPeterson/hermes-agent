@@ -118,7 +118,7 @@ def test_starlette_pinned_above_cve_2026_48710_floor_in_pyproject():
     # The four server-surface extras must each resolve the pin.
     for extra in ("web", "mcp", "computer-use", "dev"):
         assert extra in found, (
-            f"[{extra}] no longer resolves a starlette pin — CVE-2026-48710 "
+            f"[{extra}] does not resolve a starlette pin. CVE-2026-48710 "
             f"regression risk (mcp/fastapi pull it transitively with no upper bound)"
         )
 
@@ -163,7 +163,7 @@ def test_locked_starlette_is_not_vulnerable_to_cve_2026_48710():
 # ---------------------------------------------------------------------------
 # Dependency-pin consistency across every install path.
 #
-# The pins used to live in two hand-maintained places — the
+# Do not put the pins in two places written by hand. That was #31817: the
 # [project.optional-dependencies] extras in pyproject.toml and a LAZY_DEPS
 # table in tools/lazy_deps.py — and they silently drifted more than once: the
 # aiohttp Slack pin (3.13.3 vs 3.13.4) and the anthropic pin (0.86.0 vs
@@ -221,7 +221,7 @@ def _pyproject_pinned_specs():
 def _lazy_deps_pinned_specs():
     """Every spec reachable through a lazy feature.
 
-    This used to AST-parse the LAZY_DEPS literal out of tools/lazy_deps.py.
+    Do not read the source text of tools/lazy_deps.py to get these specs.
     The specs now live in pyproject.toml and lazy_deps reads them, so calling
     the real resolver both removes a source-reading test and exercises the
     code path users actually hit.

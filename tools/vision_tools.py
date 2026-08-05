@@ -669,11 +669,11 @@ def _resize_image_for_vision(image_path: Path, mime_type: Optional[str] = None,
         from PIL import Image
         import io as _io
     except ImportError:
-        # Pillow is a core dependency, so this only fires on a broken/stripped
-        # install that dropped it. There is nothing to lazy-install it from
-        # (the `vision` extra was removed — it only ever restated the core
-        # pin), so degrade gracefully: fall back to the raw bytes and let the
-        # caller raise the size error.
+        # Pillow is a core dependency, so this runs only on a damaged
+        # install. Do not add a lazy feature to install it: an extra that
+        # repeats a core pin can install nothing that the core does not
+        # already have. Return the raw bytes, and let the caller raise the
+        # size error.
         logger.info(
             "Pillow not importable — cannot auto-resize oversized image. "
             "Pillow is a core dependency; reinstall Hermes to repair."

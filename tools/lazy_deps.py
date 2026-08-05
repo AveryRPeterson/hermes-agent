@@ -26,22 +26,18 @@ Security model:
 
 * **Venv-scoped by default.** Installs target ``sys.executable`` in the
   active venv. We never touch the system Python.
-* **Durable-target mode (immutable images).** When the deployment seals the
-  agent's own venv (the Docker image sets ``HERMES_DISABLE_LAZY_INSTALLS=1``
-  and makes ``/opt/hermes`` read-only), setting
-  ``HERMES_LAZY_INSTALL_TARGET`` redirects lazy installs to a writable
-  directory on the durable data volume (e.g. ``/opt/data/lazy-packages``).
-  That directory is **appended to the end of ``sys.path``** — never
-  prepended, never exported via ``PYTHONPATH`` — so the agent's own
-  site-packages wins every name collision. A package installed this way can
-  only ADD new importable modules; it can never shadow, downgrade, or break
-  a module the core already ships. The worst a bad/incompatible backend
-  package can do is fail to import and report itself unavailable — the agent
-  core stays healthy. This is the structural guarantee that a lazily
-  installed package cannot brick Hermes, which is what made it safe to seal
-  the venv in the first place. Compiled-wheel safety across image rebuilds
-  is handled by an ABI/Python-version stamp on the target subdir (see
-  :func:`_ensure_target_ready`).
+* **Sealed deployments.** The Docker image sets
+  ``HERMES_DISABLE_LAZY_INSTALLS=1`` and makes ``/opt/hermes`` read-only.
+  Hermes refuses every install there. The image contains each extra that
+  works in a container. A lazy install in the image means that the image
+  does not have a dependency that it must ship.
+
+* **Durable-target mode.** ``HERMES_LAZY_INSTALL_TARGET`` sends installs to
+  a writable directory instead of the venv. The published image does not set
+  it, but an image that you build can. Hermes appends the directory to the
+  END of ``sys.path``. It never prepends the directory, and it never exports
+  ``PYTHONPATH``. The site-packages of the agent thus wins each name
+  collision, and a package installed this way can only ADD modules.
 * **PyPI by package name only.** Specs may be ``"package>=1.0,<2"`` etc.
   We do NOT support ``--index-url`` overrides, ``git+https://``, file:
   paths, or any other input that could be hijacked by a malicious config.
@@ -87,20 +83,17 @@ logger = logging.getLogger(__name__)
 
 
 # =============================================================================
-# Feature -> pyproject extra mapping.
+# Feature to extra map.
 #
-# Keys are dot-separated feature names ("namespace.backend"). Values are the
-# name of the ``[project.optional-dependencies]`` extra in pyproject.toml that
-# carries that backend's packages.
+# Each key is a feature name with a dot ("namespace.backend"). Each value is
+# the name of the ``[project.optional-dependencies]`` extra in pyproject.toml
+# that holds the packages for that backend.
 #
-# The specs themselves live in pyproject.toml and NOWHERE else. This module
-# used to keep its own copy of every pin, which meant two sources of truth for
-# the same dependency set and a family of drift-detector tests to keep them
-# honest. Worse, that copy could not see ``[tool.uv] override-dependencies``,
-# so a backend whose metadata capped a security-pinned package silently
-# downgraded it on first use (cryptography 50.0.0 -> 48.0.1 via DingTalk).
-# Reading the extra means a lazy install resolves exactly what `uv lock`
-# audited.
+# pyproject.toml holds the specs. No other file holds them. Do not add a
+# table of pins to this module. Such a table cannot read ``[tool.uv]
+# override-dependencies``, so a backend that holds a security-pinned package
+# below its patched version downgrades that package at first use. This
+# happened with cryptography: DingTalk moved it from 50.0.0 to 48.0.1.
 # =============================================================================
 
 
@@ -182,12 +175,12 @@ LAZY_FEATURES: dict[str, str] = {
 
 
 def _project_root() -> Optional[Path]:
-    """Return the checkout root holding pyproject.toml, or None.
+    """Return the root directory that holds pyproject.toml, or None.
 
-    Supported installs are git checkouts (``install.sh`` clones the repo) and
-    the Docker image, which copies ``pyproject.toml`` + ``uv.lock`` to its
-    WORKDIR. Anything else (a stray site-packages copy) has no project root and
-    falls back to the vendored spec table.
+    Hermes supports two install types. ``install.sh`` clones the repository,
+    and the Docker image copies ``pyproject.toml`` and ``uv.lock`` to its
+    WORKDIR. Each other layout, such as a copy in site-packages, has no
+    project root. Hermes then uses the fallback list of specs.
     """
     root = Path(__file__).resolve().parent.parent
     return root if (root / "pyproject.toml").is_file() else None
@@ -222,17 +215,18 @@ def _split_marker(spec: str) -> tuple[str, str]:
 
 
 def extra_specs(extra: str, _seen: Optional[frozenset] = None) -> tuple[str, ...]:
-    """Return the concrete specs for ``extra``, resolving ``hermes-agent[...]``.
+    """Return the specs for ``extra`` and expand each ``hermes-agent[...]``.
 
-    Extras compose: ``[messaging]`` is ``hermes-agent[telegram]`` +
-    ``hermes-agent[discord]`` + ``hermes-agent[slack]``. Self-references are
-    expanded recursively; a cycle (or a reference to an extra that doesn't
-    exist) resolves to nothing rather than recursing forever.
+    An extra can contain other extras. ``[messaging]`` contains
+    ``hermes-agent[telegram]``, ``hermes-agent[discord]`` and
+    ``hermes-agent[slack]``. This function expands each such reference. If
+    the references make a loop, or point to an extra that does not exist,
+    the function returns nothing and does not repeat forever.
 
-    A marker on a self-reference is distributed over the expansion, so
-    ``hermes-agent[wake-tflite]; platform_system == 'Darwin'`` yields
-    ``ai-edge-litert==2.1.6; platform_system == 'Darwin'`` — the same set pip
-    and uv would install.
+    The function copies a marker on a reference to each expanded spec. Thus
+    ``hermes-agent[wake-tflite]; platform_system == 'Darwin'`` gives
+    ``ai-edge-litert==2.1.6; platform_system == 'Darwin'``. pip and uv
+    install this same set.
     """
     seen = _seen or frozenset()
     if extra in seen:
@@ -293,16 +287,31 @@ class FeatureUnavailable(RuntimeError):
     installs, or the install attempt failed.
     """
 
-    def __init__(self, feature: str, missing: tuple[str, ...], reason: str):
+    def __init__(
+        self,
+        feature: str,
+        missing: tuple[str, ...],
+        reason: str,
+        *,
+        actionable: bool = True,
+    ):
         self.feature = feature
         self.missing = missing
         self.reason = reason
+        # Set this to False to remove the "install it yourself" footer. A
+        # sealed Docker venv and a package-manager install are both
+        # read-only, so the user cannot run the command. A command that
+        # always fails is worse than no command.
+        self.actionable = actionable
         super().__init__(self._format())
 
     def _format(self) -> str:
+        base = f"Feature {self.feature!r} unavailable: {self.reason}"
+        if not self.actionable or not self.missing:
+            return base
         spec_list = " ".join(repr(s) for s in self.missing)
         return (
-            f"Feature {self.feature!r} unavailable: {self.reason}. "
+            f"{base}. "
             f"To enable manually: uv pip install {spec_list}  "
             f"(or: pip install {spec_list})."
         )
@@ -320,12 +329,12 @@ class _InstallResult:
 # =============================================================================
 
 
-# Environment variable that redirects lazy installs away from the (sealed)
-# agent venv and into a writable directory on a durable volume. Set by the
-# Docker image to /opt/data/lazy-packages. This is an internal bridge var,
-# not user-facing config: the user-facing knob remains
-# security.allow_lazy_installs in config.yaml. When unset, lazy installs go
-# into the active venv as before.
+# Environment variable that sends lazy installs to a writable directory on a
+# durable volume instead of the agent venv. The published image does not set
+# it; an image that you build can. This is an internal bridge variable, not
+# configuration for the user. The control for the user is
+# security.allow_lazy_installs in config.yaml. When the variable is empty,
+# lazy installs go into the active venv.
 _LAZY_TARGET_ENV = "HERMES_LAZY_INSTALL_TARGET"
 
 # Name of the stamp file written into the target dir recording the Python
@@ -449,23 +458,44 @@ def activate_durable_lazy_target() -> None:
         logger.debug("Failed to activate durable lazy target %s: %s", target, e)
 
 
+def _sealed_venv_reason() -> Optional[str]:
+    """Return the reason that this deployment refuses installs, or None.
+
+    The Docker image sets ``HERMES_DISABLE_LAZY_INSTALLS=1``. The image
+    contains each extra that works in a container. An install here means
+    that the image does not have a dependency that it must ship. This is a
+    fault in the image build.
+
+    The message must name that cause, and must not name
+    ``security.allow_lazy_installs``. The user did not set that key, and it
+    is not why the install stopped.
+    """
+    if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") != "1":
+        return None
+    return (
+        "runtime dependency installs are disabled in this deployment "
+        "(HERMES_DISABLE_LAZY_INSTALLS=1). The container image contains "
+        "each backend that it can run. If you see this message, the image "
+        "does not have a dependency that it must ship. Please report it. "
+        "Do not install the package into the container. /opt/hermes is "
+        "read-only, and the next image update removes the change."
+    )
+
+
 def _allow_lazy_installs() -> bool:
     """Return whether lazy installs are permitted in this environment.
 
-    Resolution order:
+    Hermes reads two controls, in this order:
 
-    1. ``security.allow_lazy_installs: false`` in config.yaml is an absolute
-       opt-out — it disables installs in BOTH venv-scoped and durable-target
-       modes. This is the user-facing kill switch.
-    2. ``HERMES_DISABLE_LAZY_INSTALLS=1`` seals the *agent venv* (set by the
-       immutable Docker image). It blocks venv-scoped installs — UNLESS a
-       durable install target is configured, in which case installs are
-       redirected there (a path that structurally cannot break the sealed
-       venv) and are therefore allowed.
+    1. ``security.allow_lazy_installs: false`` in config.yaml. This is the
+       control for the user, and it stops every install.
+    2. ``HERMES_DISABLE_LAZY_INSTALLS=1``, which the Docker image sets. This
+       control also stops every install. The image contains each extra that
+       works in a container, so no correct install remains at run time.
 
-    Defaults to True. If config is unreadable we fail open (allow), because
-    refusing to install would lock people out of their own backends; the
-    decision to block is an explicit user opt-in.
+    The default is True. If Hermes cannot read the config, it permits the
+    install. A refusal locks the user out of a backend that the user owns,
+    so the user must select the refusal.
     """
     # (1) Config kill switch wins in every mode.
     try:
@@ -478,11 +508,14 @@ def _allow_lazy_installs() -> bool:
         if not bool(sec.get("allow_lazy_installs", True)):
             return False
 
-    # (2) Sealed-venv env var: blocks ONLY when there is no safe durable
-    # target to redirect into. With a target set, the install goes to the
-    # data volume (append-only on sys.path), so the seal is preserved.
+    # (2) Sealed deployment. This stops every install, even when
+    # HERMES_LAZY_INSTALL_TARGET names a writable directory. The image
+    # contains the full set of extras, so an install at run time is a fault
+    # in the image build. Do not let a target re-enable installs here: that
+    # hides the fault, and it shows unedited pip errors to the user when the
+    # container cannot reach PyPI.
     if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1":
-        return _lazy_install_target() is not None
+        return False
 
     return True
 
@@ -650,39 +683,41 @@ def _core_constraints_file() -> Optional[Path]:
         return None
 
 
-# Overrides forced onto every lazy install, mirroring
+# Hermes applies these overrides to each lazy install. They repeat
 # ``[tool.uv] override-dependencies`` in pyproject.toml.
 #
-# ``uv pip install`` / ``pip install`` do NOT read ``[tool.uv]``, so a
-# transitive dep that caps a security-pinned package below its patched floor
-# silently DOWNGRADES the core venv on first use of the backend that pulls it.
-# Measured with cryptography: the core venv ships 50.0.0, then enabling
-# DingTalk (``alibabacloud-dingtalk`` -> ``alibabacloud-tea-openapi==0.4.5``,
-# which caps ``cryptography<49``) resolved to::
+# ``uv pip install`` and ``pip install`` do not read ``[tool.uv]``. Thus a
+# transitive dependency can hold a security-pinned package below its patched
+# version, and the first use of that backend downgrades the core venv.
 #
-#     + cryptography==48.0.1     # three open advisories, re-introduced
+# Example, measured with cryptography. The core venv has 50.0.0. The user
+# enables DingTalk, which needs ``alibabacloud-dingtalk``, which needs
+# ``alibabacloud-tea-openapi==0.4.5``, which holds ``cryptography<49``. The
+# install gives::
 #
-# Pinning the floor alongside the specs is NOT a fix: the resolver satisfies
-# it by walking ``alibabacloud-tea-openapi`` back to 0.3.16 (a two-year-old
-# sdist build) instead, and pinning both is simply unsatisfiable. An overrides
-# file is the only mechanism that forces the patched version while keeping the
-# backend at its intended version, so it is passed to the uv tier below.
+#     + cryptography==48.0.1     # three open advisories, again
+#
+# A pin next to the specs does not correct this. The resolver obeys the pin
+# and moves ``alibabacloud-tea-openapi`` back to 0.3.16, an sdist build from
+# two years ago. A pin on both packages has no solution. Only an overrides
+# file keeps the patched version and the correct backend version together,
+# so Hermes gives the file to the uv tier below.
 _SECURITY_OVERRIDES: tuple[str, ...] = (
-    # alibabacloud-tea-openapi 0.4.5 caps cryptography<49; 48.0.1 carries
-    # GHSA-m2h6-j472-rp4c, GHSA-jwv3-5hgf-82ww and CVE-2026-69247. The cap is
-    # stale, not a real incompatibility — the package touches cryptography
-    # only for RSA/AES request signing. Keep in sync with the matching
-    # override in pyproject.toml's [tool.uv].
+    # alibabacloud-tea-openapi 0.4.5 holds cryptography<49. Version 48.0.1
+    # has GHSA-m2h6-j472-rp4c, GHSA-jwv3-5hgf-82ww and CVE-2026-69247. The
+    # limit is old, and the two packages are compatible. The package uses
+    # cryptography only to sign requests with RSA and AES. Keep this line
+    # equal to the override in [tool.uv] in pyproject.toml.
     "cryptography>=50,<51",
 )
 
 
 def _security_overrides_file() -> Optional[Path]:
-    """Write ``_SECURITY_OVERRIDES`` to a temp requirements file for ``--overrides``.
+    """Write ``_SECURITY_OVERRIDES`` to a temporary file for ``--overrides``.
 
-    Returns the path, or None if the file can't be written (in which case the
-    caller installs without overrides — same behaviour as before, just with
-    the downgrade risk this guards against).
+    Returns the path to the file. Returns None if Hermes cannot write the
+    file. The caller then installs without the overrides, and the downgrade
+    that this function prevents becomes possible again.
     """
     if not _SECURITY_OVERRIDES:
         return None
@@ -704,19 +739,18 @@ def _pip_reassert_overrides(
     *,
     timeout: int,
 ):
-    """Re-install ``_SECURITY_OVERRIDES`` with ``--no-deps`` after a pip install.
+    """Install ``_SECURITY_OVERRIDES`` again with ``--no-deps`` after pip runs.
 
-    pip has no ``--overrides``. Passing the floor as a ``--constraint`` does
-    hold the pinned package, but pip satisfies the constraint by resolving the
-    *backend* backwards instead (alibabacloud-tea-openapi 0.4.5 -> 0.3.16, a
-    two-year-old sdist). A ``--no-deps`` second pass avoids that entirely: it
-    rewrites only the overridden distribution and leaves everything pip already
-    resolved in place.
+    pip has no ``--overrides`` option. A ``--constraint`` file does keep the
+    pinned package, but pip then moves the backend back instead
+    (alibabacloud-tea-openapi 0.4.5 to 0.3.16, an sdist from two years ago).
+    A second pass with ``--no-deps`` prevents this. The pass changes only the
+    overridden package and keeps each other package that pip resolved.
 
-    Returns the failing ``CompletedProcess`` if the repair pass errored, or
-    None when there was nothing to do / it succeeded (caller keeps its own
-    result). A repair failure is surfaced because silently leaving a
-    downgraded security package installed is the bug this exists to prevent.
+    Returns the failed ``CompletedProcess`` if the second pass gave an error.
+    Returns None if the pass succeeded, or if there was no work. The caller
+    then keeps its own result. This function reports a failure, because a
+    downgraded security package is the fault that it must prevent.
     """
     if not _SECURITY_OVERRIDES:
         return None
@@ -742,26 +776,27 @@ def _pip_reassert_overrides(
 
 
 def _uv_sync_extra(feature: str) -> Optional[_InstallResult]:
-    """Install ``feature``'s extra with ``uv sync``, or None if not applicable.
+    """Install the extra of ``feature`` with ``uv sync``.
 
-    ``uv sync`` is the preferred installer because it is the only one that
-    resolves against ``uv.lock`` and applies ``[tool.uv]
-    override-dependencies`` — i.e. it installs exactly the versions CI audited,
-    including security overrides that ``uv pip`` / ``pip`` cannot see.
+    Hermes tries ``uv sync`` first. It is the only installer that reads
+    ``uv.lock`` and applies ``[tool.uv] override-dependencies``. It thus
+    installs the versions that CI examined, and it applies the security
+    overrides that ``uv pip`` and ``pip`` cannot read.
 
-    Returns None (caller falls back to the pip ladder) when:
+    Returns None in these conditions, and the caller then uses the pip
+    tiers:
 
-    * durable-target mode is active — that mode deliberately installs to a
-      separate dir so it cannot mutate the sealed venv, and ``uv sync``
-      manages a venv wholesale with no ``--target`` equivalent;
-    * there is no project root with a ``uv.lock`` beside ``pyproject.toml``;
-    * uv isn't available;
-    * the feature's extra isn't declared in pyproject.
+    * A durable install target is active. That mode installs to a different
+      directory, so that it cannot change the sealed venv. ``uv sync``
+      controls a full venv and has no equal to ``--target``.
+    * There is no project root that holds ``uv.lock`` and ``pyproject.toml``.
+    * uv is not available.
+    * pyproject.toml does not declare the extra of the feature.
 
-    ``--inexact`` is required: a bare ``uv sync`` prunes everything not in the
-    synced extra set, which would uninstall every other lazy backend the user
-    has enabled. ``--no-install-project`` keeps it from reinstalling Hermes
-    itself over an editable checkout.
+    The ``--inexact`` flag is necessary. A plain ``uv sync`` removes each
+    package outside the extras that it syncs, and this removes every other
+    backend that the user enabled. The ``--no-install-project`` flag stops
+    uv from installing Hermes over an editable checkout.
     """
     if _lazy_install_target() is not None:
         return None
@@ -1044,7 +1079,10 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
                 f"unsupported on {managed_by}-managed installs: this build's "
                 f"packages come from {managed_by}, so Hermes cannot install "
                 f"them at runtime. Add the dependencies for {feature!r} via "
-                f"{managed_by} (or run a pip/uv install of Hermes instead)."
+                f"{managed_by} (or run a pip/uv install of Hermes instead)",
+                # The store is read-only. A `uv pip install` hint here
+                # fails with EROFS.
+                actionable=False,
             )
 
     # Validate every spec against the allowlist + safety regex. Belt and
@@ -1057,9 +1095,11 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
             )
 
     if not _allow_lazy_installs():
+        sealed = _sealed_venv_reason()
         raise FeatureUnavailable(
             feature, missing,
-            "lazy installs disabled (security.allow_lazy_installs=false)"
+            sealed or "lazy installs disabled (security.allow_lazy_installs=false)",
+            actionable=sealed is None,
         )
 
     # Only show the interactive confirmation when we own a TTY and
@@ -1204,15 +1244,9 @@ def install_specs(specs: list[str] | tuple[str, ...], *, timeout: int = 300) -> 
             )
 
     if not _allow_lazy_installs():
-        target = _lazy_install_target()
-        if os.environ.get("HERMES_DISABLE_LAZY_INSTALLS") == "1" and target is None:
-            reason = (
-                "runtime installs are disabled on this deployment: the agent "
-                "environment is immutable and no writable install target is "
-                "configured (HERMES_LAZY_INSTALL_TARGET)"
-            )
-        else:
-            reason = "runtime installs disabled (security.allow_lazy_installs=false)"
+        reason = _sealed_venv_reason() or (
+            "runtime installs disabled (security.allow_lazy_installs=false)"
+        )
         return InstallSpecsResult(ok=False, blocked=True, reason=reason)
 
     target = _lazy_install_target()

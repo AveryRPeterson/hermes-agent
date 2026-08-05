@@ -57,13 +57,49 @@ class TestGatingWithTarget:
         )
         assert ld._allow_lazy_installs() is False
 
-    def test_disable_env_allows_with_target(self, monkeypatch, tmp_path):
+    def test_disable_env_blocks_even_with_a_target(self, monkeypatch, tmp_path):
+        """The sealed flag stops installs even when a target directory is set.
+
+        Do not let HERMES_LAZY_INSTALL_TARGET permit installs here. The image
+        contains each extra that a container can run, so an install at run
+        time means that the image does not have a dependency that it must
+        ship. A download from PyPI hides that fault, and it shows unedited
+        pip errors to the user when the container cannot reach PyPI. A volume
+        from an earlier image can still carry the directory, and it must not
+        permit installs again.
+        """
         monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
         monkeypatch.setenv(ld._LAZY_TARGET_ENV, str(tmp_path))
         monkeypatch.setattr(
             "hermes_cli.config.load_config", lambda: {}, raising=False
         )
-        assert ld._allow_lazy_installs() is True
+        assert ld._allow_lazy_installs() is False
+
+    def test_sealed_reason_does_not_blame_the_config_key(self, monkeypatch):
+        """The sealed message must not name a setting that the user never set.
+
+        The message must not say "security.allow_lazy_installs=false". That
+        key is not the cause, and the venv is read-only, so a
+        `uv pip install` command cannot succeed.
+        """
+        monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
+        reason = ld._sealed_venv_reason()
+        assert reason and "allow_lazy_installs" not in reason
+        assert "HERMES_DISABLE_LAZY_INSTALLS" in reason
+
+        monkeypatch.delenv("HERMES_DISABLE_LAZY_INSTALLS", raising=False)
+        assert ld._sealed_venv_reason() is None
+
+    def test_sealed_error_omits_the_manual_install_hint(self, monkeypatch):
+        """A `uv pip install` hint is useless against a read-only venv."""
+        monkeypatch.setenv("HERMES_DISABLE_LAZY_INSTALLS", "1")
+        err = ld.FeatureUnavailable(
+            "some.feature", ("pkg==1.0",), ld._sealed_venv_reason(), actionable=False
+        )
+        assert "uv pip install" not in str(err)
+        # ...but the normal path keeps it.
+        actionable = ld.FeatureUnavailable("some.feature", ("pkg==1.0",), "nope")
+        assert "uv pip install" in str(actionable)
 
 
     def test_normal_mode_unaffected(self, monkeypatch):
