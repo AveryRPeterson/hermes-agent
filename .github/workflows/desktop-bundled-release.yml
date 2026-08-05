@@ -1,26 +1,28 @@
 name: Desktop Bundled Release
 
-# Builds the fully self-contained desktop installers (agent payloads baked
-# in: repo snapshot at the release tag, uv + CPython, wheelhouse, node,
-# prebuilt TUI/dashboard JS) for every (os, arch) target, per the design in
+# This workflow builds the fully self-contained desktop installers for each
+# (os, arch) target. The agent payloads are baked in: the repo snapshot at
+# the release tag, uv plus CPython, the wheelhouse, node, and the prebuilt
+# TUI/dashboard JS. The design is in
 # .hermes/plans/2026-08-05_desktop-bundled-payloads-channels-eject.md.
 #
-# The entire bundled-install stack (install manifest, --payload-dir stages,
-# desktop adoption/re-materialization) is dormant unless a build sets
-# HERMES_DESKTOP_BUNDLED=1 — this workflow is the only place that does.
+# The full bundled-install stack (install manifest, --payload-dir stages,
+# desktop adoption and re-materialization) stays dormant unless a build sets
+# HERMES_DESKTOP_BUNDLED=1. This workflow is the only place that sets it.
 #
 # Triggers:
-#   * push of a final release tag (vX.Y.Z) — the normal release path.
-#   * workflow_dispatch with an explicit tag — re-runs / dry runs, with
-#     opt-in release upload.
+#   * A push of a final release tag (vX.Y.Z). This is the normal release path.
+#   * workflow_dispatch with an explicit tag, for re-runs and dry runs. The
+#     release upload is opt-in.
 #
-# Wheels/uv/python/node are all fetched NATIVELY on each runner (that's why
-# this is a matrix — electron-builder needs per-OS runners for signing
-# anyway), so there are no cross-platform wheel-tag tables anywhere.
+# Each runner fetches wheels, uv, python, and node natively. This is why the
+# workflow is a matrix: electron-builder needs per-OS runners for signing.
+# As a result, there are no cross-platform wheel-tag tables anywhere.
 #
-# Signing/notarization: notarize.mjs and electron-builder skip gracefully
-# when APPLE_*/CSC_* secrets are absent, so this workflow produces unsigned
-# artifacts on forks and signed ones once org secrets are provisioned.
+# Signing and notarization: if the APPLE_* and CSC_* secrets are absent,
+# notarize.mjs and electron-builder skip those steps. Thus this workflow
+# produces unsigned artifacts on forks. When the org secrets are set, it
+# produces signed artifacts.
 
 on:
   push:
@@ -39,7 +41,7 @@ on:
         default: false
 
 permissions:
-  contents: write # release asset upload; read-only for everything else
+  contents: write # for the release asset upload; read-only for all other content
 
 concurrency:
   group: desktop-bundled-release-${{ github.event.inputs.tag || github.ref }}
@@ -70,7 +72,7 @@ jobs:
             runner: windows-2025
             builder_args: --win nsis
     env:
-      # The one switch that wakes the whole bundled stack up.
+      # This is the one switch that turns on the whole bundled stack.
       HERMES_DESKTOP_BUNDLED: '1'
       HERMES_PAYLOAD_TAG: ${{ github.event.inputs.tag || github.ref_name }}
       HERMES_PAYLOAD_PYTHON: '3.11'
@@ -86,9 +88,9 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ env.HERMES_PAYLOAD_TAG }}
-          # stage-agent-payloads clones the payload repo from this checkout at
-          # the tag; depth-1 at the tag is all it needs, but the tag ref must
-          # exist locally.
+          # stage-agent-payloads clones the payload repo from this checkout
+          # at the tag. A depth-1 checkout at the tag is sufficient, but the
+          # tag ref must exist locally.
           fetch-tags: true
 
       # ── Node ──────────────────────────────────────────────────────────
@@ -116,8 +118,9 @@ jobs:
             uv.lock
 
       # ── Prebuild the JS surfaces that ride in the payload ─────────────
-      # ui-tui (incl. hermes-ink) + the dashboard SPA. Built here, tarred by
-      # stage-agent-payloads; first launch on the user machine never runs npm.
+      # These are ui-tui (with hermes-ink) and the dashboard SPA. The build
+      # runs here, and stage-agent-payloads makes the tarball. The first
+      # launch on the user machine never runs npm.
       - name: Build TUI
         uses: ./.github/actions/retry
         with:
@@ -128,12 +131,12 @@ jobs:
         with:
           command: npm run build --prefix web
 
-      # ── Node dist for the payload (runtime the AGENT uses, not the CI node)
+      # ── Node dist for the payload (the runtime the AGENT uses, not the CI node)
       - name: Stage node dist for payload
         shell: bash
         run: |
-          # The payload ships the same major install.sh pins for users
-          # (NODE_VERSION=22), not the workflow's node 26.
+          # The payload ships the same node major that install.sh pins for
+          # users (NODE_VERSION=22), not the workflow's node 26.
           NODE_MAJOR=22
           VERSION=$(curl -fsSL https://nodejs.org/dist/index.json | node -e '
             let d="";process.stdin.on("data",c=>d+=c).on("end",()=>{
@@ -148,25 +151,26 @@ jobs:
           esac
           mkdir -p /tmp/node-payload /tmp/node-extract
           curl -fsSL "https://nodejs.org/dist/$VERSION/$DIST" -o "/tmp/$DIST"
-          # bsdtar (Windows tar.exe) reads .zip too, so one extraction path
-          # covers all three archive shapes: unpack, then hoist the single
-          # top-level node-vX.Y.Z-* directory's contents.
+          # bsdtar (Windows tar.exe) also reads .zip, so one extraction path
+          # covers all three archive shapes. Unpack the archive. Then move
+          # the contents of the single top-level node-vX.Y.Z-* directory up.
           tar -xf "/tmp/$DIST" -C /tmp/node-extract
           mv /tmp/node-extract/*/* /tmp/node-payload/
           test -x /tmp/node-payload/bin/node || test -x /tmp/node-payload/node.exe
           echo "HERMES_PAYLOAD_NODE_DIST=/tmp/node-payload" >> "$GITHUB_ENV"
 
       # ── Build + package the desktop app with payloads ──────────────────
-      # npm run build runs write-build-stamp (hard-fails if
-      # HERMES_DESKTOP_BUNDLED=1 without HERMES_PAYLOAD_TAG) and
-      # stage-agent-payloads (repo clone at the tag, uv+python, wheelhouse
-      # via `uvx pip wheel --only-binary=:all:`, node dist, js tarball).
+      # npm run build runs write-build-stamp, which fails hard when
+      # HERMES_DESKTOP_BUNDLED=1 is set without HERMES_PAYLOAD_TAG. It also
+      # runs stage-agent-payloads: the repo clone at the tag, uv plus python,
+      # the wheelhouse via `uvx pip wheel --only-binary=:all:`, the node
+      # dist, and the js tarball.
       - name: Build and package
         working-directory: apps/desktop
         shell: bash
         env:
-          # macOS signing/notarization — absent on forks; notarize.mjs and
-          # electron-builder both skip gracefully.
+          # macOS signing and notarization secrets. If they are absent (on
+          # forks), notarize.mjs and electron-builder skip those steps.
           APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
           APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
@@ -190,7 +194,7 @@ jobs:
           retention-days: 30
           if-no-files-found: error
 
-      # ── Attach to the GitHub release (tag pushes + opt-in dispatch) ────
+      # ── Attach to the GitHub release (tag pushes and opt-in dispatch) ────
       - name: Upload to GitHub release
         if: github.event_name == 'push' || github.event.inputs.upload_release == 'true'
         shell: bash

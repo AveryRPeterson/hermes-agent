@@ -109,11 +109,11 @@ export function resolveStamp({
 } = {}) {
   const stamp = fromCI(env) || fromLocalGit(repoRoot, execFn) || fromFallback(fallbackBranch)
   // Bundled builds (HERMES_DESKTOP_BUNDLED=1) carry agent payloads at a
-  // pinned release tag: record both so the bootstrap (a) knows payloads
-  // exist and (b) can compare the marker's pinnedTag against the stamp tag
-  // to trigger offline re-materialization after an app update. Thin builds
-  // keep payload:false and no tag — schema is additive, older readers
-  // ignore the new fields.
+  // pinned release tag. Record both facts. Then the bootstrap knows that
+  // payloads exist, and it can compare the pinnedTag of the marker against
+  // the stamp tag. That comparison triggers offline re-materialization
+  // after an app update. Thin builds keep payload:false and no tag. The
+  // schema is additive, and older readers ignore the new fields.
   const bundled = env.HERMES_DESKTOP_BUNDLED === "1"
   const tag = env.HERMES_PAYLOAD_TAG || null
   if (bundled && !tag) {

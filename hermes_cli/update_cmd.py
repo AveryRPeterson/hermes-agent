@@ -103,17 +103,17 @@ _UPDATE_CRITICAL_FILES = (
     "hermes_constants.py",
 )
 
-# Release tags look like v1.2.3 (optionally with a pre-release suffix, which
-# the stable channel deliberately IGNORES — stable means final releases only).
+# Release tags have the form v1.2.3. A tag can have a pre-release suffix.
+# The stable channel ignores tags with a suffix. Stable means final releases only.
 _RELEASE_TAG_RE = None  # compiled lazily in _parse_release_tag
 
 
 def _parse_release_tag(tag: str):
-    """Parse ``vX.Y.Z`` into a sortable (X, Y, Z) tuple, or None.
+    """Parse ``vX.Y.Z`` into a sortable (X, Y, Z) tuple, or return None.
 
-    Pre-release/build-suffixed tags (``v1.2.3-rc1``) and anything not shaped
-    like a final release return None — the stable channel only ever moves
-    between final releases.
+    Tags with a pre-release or build suffix (``v1.2.3-rc1``) return None.
+    Tags that do not have the shape of a final release also return None.
+    The stable channel only moves between final releases.
     """
     global _RELEASE_TAG_RE
     if _RELEASE_TAG_RE is None:
@@ -127,11 +127,11 @@ def _parse_release_tag(tag: str):
 
 
 def _latest_release_tag_from_ls_remote(output: str):
-    """Pick the newest final-release tag from ``git ls-remote --tags`` output.
+    """Select the newest final-release tag from ``git ls-remote --tags`` output.
 
-    Returns ``(tag, sha)`` or ``(None, None)``. Peeled entries (``^{}``) are
-    preferred over the tag-object SHA so annotated and lightweight tags both
-    yield the commit SHA.
+    Returns ``(tag, sha)`` or ``(None, None)``. Peeled entries (``^{}``) have
+    priority over the tag-object SHA. Thus annotated tags and lightweight tags
+    both give the commit SHA.
     """
     best = None          # (version_tuple, tag)
     shas = {}            # tag -> commit sha (peeled wins)
@@ -160,7 +160,7 @@ def _latest_release_tag_from_ls_remote(output: str):
 
 
 def _resolve_latest_release_tag(git_cmd, cwd):
-    """Query origin for the newest final release tag. Returns (tag, sha) or (None, None)."""
+    """Ask origin for the newest final release tag. Returns (tag, sha) or (None, None)."""
     try:
         result = subprocess.run(
             git_cmd + ["ls-remote", "--tags", "origin", "v*"],
@@ -182,13 +182,13 @@ def _resolve_latest_release_tag(git_cmd, cwd):
 
 
 def _stable_channel_active(args) -> bool:
-    """True when this update should track tagged releases instead of a branch.
+    """Return True when this update must track tagged releases, not a branch.
 
-    An explicit ``--branch`` always wins — it is the user telling us exactly
-    what to update against, and silently overriding it with a tag would
-    recreate the class of bug --branch exists to prevent. Otherwise the
-    effective channel comes from the install manifest + ``update.channel``
-    in config.yaml (see hermes_cli.install_manifest.resolve_update_channel).
+    An explicit ``--branch`` always wins. With this flag the user tells us the
+    exact update target. If a tag silently overrides the flag, the class of bug
+    that --branch prevents comes back. In all other cases the effective channel
+    comes from the install manifest and ``update.channel`` in config.yaml
+    (see hermes_cli.install_manifest.resolve_update_channel).
     """
     if getattr(args, "branch", None):
         return False
@@ -208,11 +208,12 @@ def _stable_channel_active(args) -> bool:
 
 
 def _github_latest_release_tag():
-    """Resolve the newest final-release tag via the GitHub API (no git needed).
+    """Resolve the newest final-release tag with the GitHub API (no git necessary).
 
-    Used by the ZIP-fallback path, which exists precisely because git file
-    I/O is broken. Prefers /releases/latest (respects draft/prerelease
-    curation); falls back to listing tags and picking the max final release.
+    The ZIP-fallback path uses this function. That path exists because git
+    file I/O is broken. The function tries /releases/latest first, because that
+    endpoint obeys the draft and prerelease curation. If that fails, it lists
+    the tags and selects the maximum final release.
     Returns the tag name or None.
     """
     import urllib.error
@@ -898,17 +899,17 @@ def _update_via_zip(args):
         )
         _m().sys.exit(1)
 
-    # Stable channel: pull the release tag's archive instead of main. The ZIP
-    # path runs when git *file I/O* is broken, so resolve the tag via the
-    # GitHub API rather than git — no git invocation needed at all.
+    # Stable channel: pull the archive of the release tag, not main. The ZIP
+    # path runs when git file I/O is broken. Thus resolve the tag with the
+    # GitHub API, not with git. No git invocation is necessary.
     zip_ref = f"refs/heads/{branch}"
     if _stable_channel_active(args):
         tag = _github_latest_release_tag()
         if tag is None:
-            print("✗ Could not resolve the latest release from the GitHub API.")
+            print("✗ Hermes cannot resolve the latest release from the GitHub API.")
             print("  Switch channels with: hermes config set update.channel main")
             _m().sys.exit(1)
-        print(f"→ Update channel: stable — downloading release {tag}")
+        print(f"→ Update channel: stable. Hermes downloads release {tag}.")
         zip_ref = f"refs/tags/{tag}"
     zip_url = (
         f"https://github.com/NousResearch/hermes-agent/archive/{zip_ref}.zip"
@@ -2383,9 +2384,9 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
     if sys.platform == "win32":
         git_cmd = ["git", "-c", "windows.appendAtomically=false"]
 
-    # Stable channel: unless the caller explicitly asked for a branch, the
-    # question is "is there a newer tagged release?" — not "are there new
-    # commits on main?". Answer against the newest release tag and return.
+    # Stable channel: if the caller did not ask for a branch, the question is
+    # "is there a newer tagged release?". The question is not "are there new
+    # commits on main?". Compare against the newest release tag and return.
     if not branch_explicit:
         class _NoBranchArgs:
             branch = None
@@ -2394,13 +2395,13 @@ def _cmd_update_check(branch: str = "main", *, branch_explicit: bool = False):
             print("→ Update channel: stable (tagged releases)")
             tag, tag_sha = _resolve_latest_release_tag(git_cmd, _m().PROJECT_ROOT)
             if tag is None:
-                print("✗ No release tags found on origin — cannot check the stable channel.")
+                print("✗ No release tags found on origin. A check of the stable channel is not possible.")
                 print("  Switch channels with: hermes config set update.channel main")
                 sys.exit(1)
             head_sha = _capture_head_sha(git_cmd, _m().PROJECT_ROOT)
-            # Newer releases may not exist locally yet; "at the tag" is a SHA
-            # comparison, and merge-base tells us whether the tag is already
-            # contained in HEAD (HEAD ahead of or at the release).
+            # Newer releases possibly do not exist locally yet. "At the tag"
+            # is a SHA comparison. The merge-base check tells us whether HEAD
+            # contains the tag (HEAD is ahead of the release or at the release).
             at_or_past_tag = False
             if head_sha and tag_sha:
                 if head_sha == tag_sha:
@@ -3760,12 +3761,12 @@ def _normalize_managed_eol(git_cmd, repo_root):
 def cmd_update_eject(args) -> int:
     """Implement ``hermes update --eject``.
 
-    Flips a desktop-bundled checkout to source management: unshallows the
-    git history (bundled payload clones are depth-1), fetches tags, and
-    rewrites the install manifest to ``installMode: source`` with the chosen
-    channel. After this, ``hermes update`` owns the checkout and the desktop
-    app's bootstrap skips its agent stages (it refuses to overwrite a
-    source-mode checkout).
+    This function changes a desktop-bundled checkout to source management. It
+    unshallows the git history, because bundled payload clones are depth-1. It
+    fetches the tags. It rewrites the install manifest to ``installMode:
+    source`` with the selected channel. After this, ``hermes update`` owns the
+    checkout. The bootstrap of the desktop app then skips its agent stages,
+    because it refuses to overwrite a source-mode checkout.
 
     Returns a process exit code.
     """
@@ -3783,30 +3784,31 @@ def cmd_update_eject(args) -> int:
     manifest = read_install_manifest(project_root)
     channel = getattr(args, "channel", None) or CHANNEL_MAIN
     if channel not in (CHANNEL_MAIN, CHANNEL_STABLE):
-        print(f"✗ Unknown channel '{channel}' — use 'stable' or 'main'.")
+        print(f"✗ Unknown channel '{channel}'. Use 'stable' or 'main'.")
         return 1
 
     if manifest.get("installMode") != "bundled":
-        # Already source-managed. Still honor an explicit --channel request so
-        # `hermes update --eject --channel stable` is a one-shot way to switch,
-        # but don't touch git history.
+        # The install is already source-managed. Obey an explicit --channel
+        # request, so that `hermes update --eject --channel stable` is a
+        # one-shot way to switch. But do not touch the git history.
         if getattr(args, "channel", None):
             manifest["installMode"] = MODE_SOURCE
             manifest["channel"] = channel
-            # Deliberately NOT marking ejected here: this shorthand runs on
-            # checkouts that were never desktop-managed (or already ejected —
-            # in which case the existing style is preserved below). A plain
-            # channel switch is not an adoption opt-out.
+            # We do not set the ejected mark here. This shorthand runs on
+            # checkouts that the desktop never managed, or on checkouts that
+            # the user already ejected. In the second case, the code below
+            # keeps the existing style. A plain channel switch is not an
+            # adoption opt-out.
             write_install_manifest(manifest, project_root)
-            print(f"✓ Install is already source-managed; channel set to '{channel}'.")
+            print(f"✓ The install is already source-managed. The channel is now '{channel}'.")
         else:
-            print("✓ Nothing to eject — this install is already source-managed.")
-            print("  (Only desktop-bundled installs need ejecting.)")
+            print("✓ Nothing to eject. This install is already source-managed.")
+            print("  (Only desktop-bundled installs need an eject.)")
         return 0
 
     git_dir = project_root / ".git"
     if not git_dir.exists():
-        print("✗ Cannot eject: the checkout is not a git repository.")
+        print("✗ An eject is not possible. This checkout is not a git repository.")
         print("  Reinstall from source instead:")
         print("  curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash")
         return 1
@@ -3825,13 +3827,13 @@ def cmd_update_eject(args) -> int:
         == "true"
     )
 
-    print("⚕ Ejecting from desktop-managed updates...")
+    print("⚕ Hermes ejects this install from desktop-managed updates...")
     fetch_args = ["fetch", "--tags", "origin"]
     if is_shallow:
-        print("→ Fetching full git history (this can take a minute)...")
+        print("→ Hermes fetches the full git history (this can take a minute)...")
         fetch_args.insert(1, "--unshallow")
     else:
-        print("→ Fetching tags...")
+        print("→ Hermes fetches the tags...")
     fetch_result = subprocess.run(
         git_cmd + fetch_args,
         cwd=project_root,
@@ -3840,27 +3842,28 @@ def cmd_update_eject(args) -> int:
     )
     if fetch_result.returncode != 0:
         stderr = (fetch_result.stderr or "").strip()
-        print("✗ git fetch failed — eject aborted; the install is unchanged.")
+        print("✗ git fetch failed. Hermes aborted the eject. The install is unchanged.")
         if stderr:
             print(f"  {stderr.splitlines()[0]}")
         return 1
 
     manifest["installMode"] = MODE_SOURCE
     manifest["channel"] = channel
-    # Sticky opt-out: auto-adoption must never silently pull an ejected
-    # checkout back into the bundled path.
+    # Sticky opt-out: auto-adoption must never pull an ejected checkout back
+    # into the bundled path without a message.
     manifest["manageStyle"] = STYLE_EJECTED
-    # The tag pin describes the *bundled* payload provenance; keep it for
-    # forensics but it no longer governs updates once mode is source.
+    # The tag pin records the source of the bundled payload. Keep it for
+    # forensics. After the mode is source, the tag pin no longer controls
+    # updates.
     write_install_manifest(manifest, project_root)
 
     print("✓ Ejected. This checkout is now source-managed.")
     print(f"  • Update channel: {channel}"
           + (" (tagged releases)" if channel == CHANNEL_STABLE else " (git main)"))
     print("  • Update with: hermes update")
-    print("  • The desktop app will keep updating itself, but will no longer")
-    print("    modify this checkout. Expect the app and agent versions to")
-    print("    drift apart until you update the agent yourself.")
+    print("  • The desktop app will continue to update itself. But it will no")
+    print("    longer change this checkout. The app version and the agent version")
+    print("    will move apart until you update the agent yourself.")
     print(f"  • Manifest: {install_manifest_path(project_root)}")
     return 0
 
@@ -4048,12 +4051,12 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # against.
         branch = _m()._resolve_update_branch(args)
 
-        # target_ref is what we count against, fast-forward to, and reset to.
-        # On the main channel it is origin/<branch> (historical behavior).
-        # On the stable channel it is the newest release tag's commit — the
-        # current branch pointer fast-forwards to the release, so the checkout
-        # stays branch-shaped (no detached HEAD) and the next stable update
-        # ff-merges to the following tag.
+        # target_ref is the reference that we count against, fast-forward to,
+        # and reset to. On the main channel it is origin/<branch>. That is the
+        # historical behavior. On the stable channel it is the commit of the
+        # newest release tag. The current branch pointer fast-forwards to the
+        # release. Thus the checkout keeps its branch shape (no detached HEAD).
+        # The next stable update then fast-forward merges to the next tag.
         target_ref = f"origin/{branch}"
         stable_tag = None
         if _stable_channel_active(args):
@@ -4062,7 +4065,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 git_cmd, _m().PROJECT_ROOT
             )
             if stable_tag is None:
-                print("✗ No release tags found on origin — cannot update on the stable channel.")
+                print("✗ No release tags found on origin. An update on the stable channel is not possible.")
                 print("  Switch channels with: hermes config set update.channel main")
                 _m()._resume_windows_gateways_after_update(_windows_gateway_resume)
                 sys.exit(1)
@@ -4107,9 +4110,9 @@ def _cmd_update_impl(args, gateway_mode: bool):
         # to the target. When the target is "main" this is the historical
         # "always update against main" behavior; for any other target it's
         # the same thing — get HEAD onto the requested branch first, then
-        # fast-forward. On the stable channel we deliberately do NOT switch
-        # branches: whatever branch the checkout is on simply fast-forwards
-        # (or resets) to the release tag's commit.
+        # fast-forward. On the stable channel we do NOT switch branches. The
+        # branch of the checkout fast-forwards (or resets) to the commit of
+        # the release tag.
         if stable_tag is not None:
             target_ref = stable_tag
             auto_stash_ref = _m()._stash_local_changes_if_needed(git_cmd, _m().PROJECT_ROOT)
@@ -4177,7 +4180,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             _invalidate_update_cache()
 
             # Even if origin is up to date, the fork may be behind upstream
-            # (main channel only — a stable checkout tracks tags, not main).
+            # (main channel only, because a stable checkout tracks tags, not main).
             if is_fork and branch == "main" and stable_tag is None:
                 _m()._sync_with_upstream_if_needed(git_cmd, _m().PROJECT_ROOT)
 

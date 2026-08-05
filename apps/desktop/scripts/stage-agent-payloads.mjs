@@ -1,31 +1,31 @@
 /**
- * stage-agent-payloads.mjs — assemble the offline agent payload tree that
- * ships inside the bundled desktop artifact (design:
- * .hermes/plans/2026-08-05_desktop-bundled-payloads-channels-eject.md §2).
+ * stage-agent-payloads.mjs: assemble the offline agent payload tree that
+ * ships inside the bundled desktop artifact. Design:
+ * .hermes/plans/2026-08-05_desktop-bundled-payloads-channels-eject.md §2.
  *
  * Output: apps/desktop/build/agent-payload/
  *   manifest.json          schemaVersion, tag, commit, platform, arch, per-item status
- *   repo/                  shallow git clone at the release tag (keeps .git —
- *                          that is what makes `hermes update --eject` nearly
- *                          free and keeps the checkout git-shaped)
+ *   repo/                  a shallow git clone at the release tag. It keeps
+ *                          .git, which makes `hermes update --eject` almost
+ *                          free and keeps the checkout git-shaped.
  *   uv/                    static uv binary for this platform/arch
  *   python/                uv-managed CPython (python-build-standalone)
- *   wheels/                resolved wheelhouse from uv.lock for this platform/arch
+ *   wheels/                the resolved wheelhouse from uv.lock for this platform/arch
  *   node/                  official node dist for this platform/arch
  *   js-prebuilt.tar.zst    PREBUILT JS surfaces + node_modules (ui-tui dist +
- *                          hermes-ink, web_dist) — first launch never runs
- *                          npm install or npm run build
+ *                          hermes-ink, web_dist). Thus the first launch never
+ *                          runs npm install or npm run build.
  *
- * Gating: does nothing unless HERMES_DESKTOP_BUNDLED=1 (internal build-time
- * env for CI wiring, not user config), so dev builds and current CI keep
- * producing thin artifacts. Individual items can be skipped via
- * --skip=<item,item> for incremental CI caching; every skip is recorded in
- * manifest.json so the bootstrap knows to fall back to its network path for
- * that stage (per-stage fallback rule, plan §3).
+ * Gating: the script does nothing unless HERMES_DESKTOP_BUNDLED=1. That
+ * variable is an internal build-time env for CI wiring, not user config.
+ * Thus dev builds and current CI keep producing thin builds. You can skip
+ * individual items with --skip=<item,item> for incremental CI caching.
+ * The manifest.json records every skip. Thus the bootstrap knows to fall
+ * back to its network path for that stage (per-stage fallback rule, plan §3).
  *
- * The heavy lifting shells out to git / uv / npm / tar; the decision logic
- * (target resolution, uv arg construction, manifest shape) is exported pure
- * so vitest covers it without network or toolchains.
+ * The heavy work shells out to git, uv, npm, and tar. The decision logic
+ * (target resolution, uv arg construction, manifest shape) is exported as
+ * pure functions. Thus vitest covers it without network or toolchains.
  */
 
 import { execSync, spawnSync } from "node:child_process"
@@ -43,14 +43,15 @@ const OUT_DIR = path.join(DESKTOP_ROOT, "build", "agent-payload")
 export const PAYLOAD_ITEMS = ["repo", "uv", "python", "wheels", "node", "js-prebuilt"]
 
 /**
- * Map (process.platform, process.arch) → the uv / python-build-standalone /
- * node target descriptors. One artifact per (os, arch); mac universal2 is
- * deliberately NOT a target — we ship two artifacts (plan §6).
+ * Map (process.platform, process.arch) to the uv, python-build-standalone,
+ * and node target descriptors. There is one artifact per (os, arch) pair.
+ * Mac universal2 is deliberately NOT a target. We ship two artifacts
+ * (plan §6).
  *
- * No cross-platform wheel tags here on purpose: payloads are assembled on a
- * per-(os, arch) CI runner (electron-builder needs per-OS runners for
- * signing anyway), so wheels are fetched NATIVELY with
- * `uvx pip wheel --only-binary=:all:` — the runner's own platform is the
+ * There are no cross-platform wheel tags here, on purpose. A CI runner per
+ * (os, arch) pair assembles the payloads. electron-builder needs per-OS
+ * runners for signing anyway. Thus the script fetches wheels NATIVELY with
+ * `uvx pip wheel --only-binary=:all:`. The platform of the runner is the
  * target platform.
  */
 export function resolveTargets(platform = process.platform, arch = process.arch) {
@@ -95,12 +96,13 @@ export function resolveTargets(platform = process.platform, arch = process.arch)
 }
 
 /**
- * Build the `pip wheel` argument list (invoked via `uvx pip …` so no host
- * pip install is needed). Runs NATIVELY on the target runner: with
- * --only-binary=:all: it downloads prebuilt wheels for this platform and
- * never compiles (an sdist in the payload would try to build at first
- * launch — offline, no toolchain — so sdists are refused outright).
- * Consumption is `uv sync --frozen --offline --no-index --find-links`.
+ * Build the `pip wheel` argument list. The caller invokes it through
+ * `uvx pip …`, so no host pip install is necessary. It runs NATIVELY on
+ * the target runner. With --only-binary=:all:, it downloads prebuilt
+ * wheels for this platform and never compiles. An sdist in the payload
+ * tries to build at first launch, which is offline and has no toolchain.
+ * Thus the arguments refuse sdists outright. The consumer runs
+ * `uv sync --frozen --offline --no-index --find-links`.
  */
 export function wheelDownloadArgs({ wheelsDir }) {
   return [
@@ -112,10 +114,10 @@ export function wheelDownloadArgs({ wheelsDir }) {
 }
 
 /**
- * The release tag being staged. CI passes --tag=vX.Y.Z; local runs may fall
- * back to `git describe` for smoke-testing. No tag → payload staging is a
- * hard error when bundling was requested: a bundled artifact without a pinned
- * tag would produce un-adoptable, un-updatable installs.
+ * Resolve the release tag to stage. CI passes --tag=vX.Y.Z. Local runs can
+ * fall back to `git describe` for smoke tests. When bundling was requested
+ * and no tag exists, payload staging is a hard error. A bundled artifact
+ * without a pinned tag produces un-adoptable, un-updatable installs.
  */
 export function resolveTag(argv, describeFn) {
   const explicit = argv.find((a) => a.startsWith("--tag="))
@@ -154,10 +156,11 @@ export function parseSkips(argv) {
 }
 
 /**
- * Manifest describing what the payload tree actually contains. `items`
- * records per-item presence so install.sh/ps1's --payload-dir stages can
- * fall back to their network path for anything missing — a partially
- * assembled payload degrades instead of failing the whole bootstrap.
+ * Build the manifest that describes the contents of the payload tree.
+ * `items` records per-item presence. Thus the --payload-dir stages of
+ * install.sh/ps1 can fall back to their network path for each missing
+ * item. A partly assembled payload degrades and does not fail the whole
+ * bootstrap.
  */
 export function buildManifest({ tag, commit, target, staged, skipped }) {
   const items = {}
@@ -177,7 +180,7 @@ export function buildManifest({ tag, commit, target, staged, skipped }) {
   }
 }
 
-// ─── impure staging steps (shell out; no unit tests, exercised in CI) ──────
+// ─── impure staging steps (they shell out, have no unit tests, and run in CI) ──────
 
 function run(cmd, args, opts = {}) {
   const result = spawnSync(cmd, args, { stdio: "inherit", ...opts })
@@ -189,8 +192,8 @@ function run(cmd, args, opts = {}) {
 function stageRepo(tag, outDir) {
   const repoDir = path.join(outDir, "repo")
   fs.rmSync(repoDir, { recursive: true, force: true })
-  // file:// clone from the local checkout when it has the tag; otherwise
-  // clone from origin. Depth 1 at the tag; .git is kept deliberately.
+  // Clone from the local checkout when it has the tag. Otherwise clone
+  // from origin. The clone is depth 1 at the tag. .git is kept on purpose.
   run("git", [
     "clone", "--depth", "1", "--branch", tag,
     "--config", "remote.origin.url=https://github.com/NousResearch/hermes-agent.git",
@@ -205,8 +208,9 @@ function stageUvAndPython(target, outDir) {
   const pythonDir = path.join(outDir, "python")
   fs.mkdirSync(uvDir, { recursive: true })
   fs.mkdirSync(pythonDir, { recursive: true })
-  // Native runner: the uv running this build IS the target-platform uv.
-  // HERMES_PAYLOAD_UV overrides for exotic setups; default is `uv` on PATH.
+  // Native runner: the uv that runs this build IS the target-platform uv.
+  // HERMES_PAYLOAD_UV overrides this for unusual setups. The default is
+  // `uv` on PATH.
   const uvName = target.platform === "win32" ? "uv.exe" : "uv"
   const uvSource =
     process.env.HERMES_PAYLOAD_UV ||
@@ -221,9 +225,9 @@ function stageUvAndPython(target, outDir) {
 function stageWheels(target, outDir) {
   const wheelsDir = path.join(outDir, "wheels")
   fs.mkdirSync(wheelsDir, { recursive: true })
-  // Export the lock to a requirements file, then fetch wheels natively via
-  // uvx pip (no host pip needed). --only-binary means "download published
-  // wheels", never compile.
+  // Export the lock to a requirements file. Then fetch wheels natively
+  // through uvx pip, so no host pip is necessary. --only-binary means
+  // "download published wheels" and never compile.
   run("uv", ["export", "--frozen", "--no-emit-project", "-o", "requirements-payload.txt"], { cwd: REPO_ROOT })
   run("uvx", ["pip", ...wheelDownloadArgs({ wheelsDir })], { cwd: REPO_ROOT })
 }
@@ -239,9 +243,9 @@ function stageNode(target, outDir) {
 }
 
 function stageJsPrebuilt(outDir) {
-  // CI builds ui-tui (incl. hermes-ink) and web_dist BEFORE this script runs;
-  // here we just tar what exists. Deliberately excludes apps/desktop —
-  // the bundled shell IS the desktop app (plan §2.1).
+  // CI builds ui-tui (with hermes-ink) and web_dist BEFORE this script
+  // runs. Here we only tar what exists. The tar excludes apps/desktop on
+  // purpose. The bundled shell IS the desktop app (plan §2.1).
   const listFile = path.join(outDir, ".js-prebuilt-paths")
   const candidates = ["ui-tui/dist", "ui-tui/node_modules", "web_dist"].filter((p) =>
     fs.existsSync(path.join(REPO_ROOT, p))
@@ -259,10 +263,11 @@ function stageJsPrebuilt(outDir) {
 
 function main() {
   if (process.env.HERMES_DESKTOP_BUNDLED !== "1") {
-    // Thin build: still write a stub manifest so the extraResources entry
-    // always has a real directory to copy (electron-builder's handling of a
-    // missing `from` is version-dependent) and so runtime code can uniformly
-    // read manifest.json to learn there are no payloads.
+    // Thin build: write a stub manifest anyway. Then the extraResources
+    // entry always has a real directory to copy. The behavior of
+    // electron-builder for a missing `from` changes between versions. The
+    // stub also lets runtime code read manifest.json uniformly and learn
+    // that there are no payloads.
     fs.mkdirSync(OUT_DIR, { recursive: true })
     fs.writeFileSync(
       path.join(OUT_DIR, "manifest.json"),
@@ -290,7 +295,7 @@ function main() {
       commit = stageRepo(tag, OUT_DIR)
     },
     uv: () => stageUvAndPython(target, OUT_DIR),
-    python: () => {}, // staged together with uv (single uv invocation)
+    python: () => {}, // The uv step stages python too (one uv invocation).
     wheels: () => stageWheels(target, OUT_DIR),
     node: () => stageNode(target, OUT_DIR),
     "js-prebuilt": () => stageJsPrebuilt(OUT_DIR),

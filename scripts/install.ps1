@@ -44,10 +44,10 @@ param(
     [switch]$Json,
 
     # --- Offline payload tree (desktop bundled artifact) ---
-    # Points at the agent-payload/ directory shipped in the bundled desktop
-    # app's resources (see apps/desktop/scripts/stage-agent-payloads.mjs).
-    # Stages that normally hit the network source locally from it instead;
-    # anything missing falls back to the stage's normal network path.
+    # Points at the agent-payload/ directory in the bundled desktop app's
+    # resources (see apps/desktop/scripts/stage-agent-payloads.mjs). Stages
+    # that normally use the network read local content from the payload
+    # instead. If an item is missing, the stage uses its normal network path.
     [string]$PayloadDir = "",
 
     # Print the paths this install would use, as JSON, and exit without
@@ -4020,9 +4020,9 @@ function Stage-Configure        { Invoke-SetupWizard }
 function Stage-Gateway          { Start-GatewayIfConfigured }
 
 # ─── Offline payload support (-PayloadDir; desktop bundled artifact) ───────
-# Mirror of install.sh's payload_* helpers. Each network-touching stage
-# first tries the payload; a $false return means "fall back to the normal
-# network path". Keep the two scripts in lockstep.
+# This section is a mirror of the payload_* helpers in install.sh. Each
+# network-touching stage first tries the payload. A $false return means
+# "fall back to the normal network path". Keep the two scripts in lockstep.
 
 function Get-PayloadManifest {
     if (-not $PayloadDir) { return $null }
@@ -4047,7 +4047,7 @@ function Get-PayloadTag {
 
 function Test-PayloadRefusesSourceCheckout {
     # The eject contract: never overwrite a checkout whose .hermes-install.json
-    # says installMode source. Missing manifest is NOT a refusal.
+    # says installMode source. A missing manifest is not a refusal.
     $manifestPath = Join-Path $InstallDir ".hermes-install.json"
     if (-not (Test-Path $manifestPath)) { return $false }
     try {
@@ -4102,7 +4102,7 @@ function Invoke-PayloadStageJs {
     $archive = Join-Path $PayloadDir "js-prebuilt.tar.zst"
     if (-not (Test-Path $archive)) { return $false }
     Write-Info "Unpacking prebuilt JS surfaces (no npm needed)..."
-    # Windows 10 1803+ ships bsdtar as tar.exe with zstd support.
+    # Windows 10 1803 and later ships bsdtar as tar.exe with zstd support.
     & tar --zstd -xf $archive -C $InstallDir 2>&1 | Out-Null
     if ($LASTEXITCODE -ne 0) { return $false }
     Write-Success "Prebuilt JS surfaces unpacked"
@@ -4110,8 +4110,8 @@ function Invoke-PayloadStageJs {
 }
 
 function Write-InstallModeManifest {
-    # Decide + write .hermes-install.json at install completion. NEVER
-    # overwrites an ejected manifest — the opt-out is sticky.
+    # Decides and writes .hermes-install.json at install completion. The
+    # function never overwrites an ejected manifest. The opt-out is sticky.
     if (-not (Test-Path $InstallDir)) { return }
     $manifestPath = Join-Path $InstallDir ".hermes-install.json"
     if (Test-Path $manifestPath) {

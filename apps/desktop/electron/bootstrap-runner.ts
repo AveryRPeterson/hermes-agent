@@ -874,7 +874,7 @@ async function runBootstrap(opts) {
     logRoot,
     onEvent,
     abortSignal,
-    payloadDir = null, // resources/agent-payload dir for bundled builds (bundled-runtime.resolvePayload)
+    payloadDir = null, // The resources/agent-payload dir for bundled builds (bundled-runtime.resolvePayload).
     writeMarker // callback to write the bootstrap-complete marker; main.ts provides
   } = opts
 
@@ -1012,9 +1012,10 @@ async function runBootstrap(opts) {
     const markerPayload = {
       pinnedCommit,
       pinnedBranch: installStamp ? installStamp.branch : null,
-      // Bundled builds: record which payload tag this bootstrap materialized.
-      // main.ts compares this against the (possibly newer) stamp tag at
-      // launch to decide offline re-materialization after an app update.
+      // Bundled builds: record the payload tag that this bootstrap
+      // materialized. At launch, main.ts compares this tag against the
+      // stamp tag, which can be newer. The comparison decides offline
+      // re-materialization after an app update.
       pinnedTag: installStamp && (installStamp as any).payload === true ? (installStamp as any).tag || null : null
     }
 

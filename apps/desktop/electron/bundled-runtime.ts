@@ -1,13 +1,14 @@
-// bundled-runtime.ts — decision logic for the bundled desktop runtime:
-// payload discovery, marker-tag invalidation (when does an app update force
-// offline re-materialization?), and silent adoption eligibility for pristine
-// legacy checkouts.
+// bundled-runtime.ts: decision logic for the bundled desktop runtime.
+// This module finds payloads, decides marker-tag invalidation, and decides
+// silent adoption for pristine legacy checkouts. Marker-tag invalidation
+// tells us when an app update forces offline re-materialization.
 //
 // Design: .hermes/plans/2026-08-05_desktop-bundled-payloads-channels-eject.md
 // (§1.4 adoption, §4.3 bundled update flow).
 //
-// Everything here is pure (dependencies injected) so vitest covers the whole
-// decision surface; the impure executors live in main.ts / bootstrap-runner.
+// All functions in this file are pure, and the callers inject the
+// dependencies. Thus vitest covers the whole decision surface. The impure
+// executors live in main.ts and bootstrap-runner.
 
 import fs from 'node:fs'
 import path from 'node:path'
@@ -21,10 +22,11 @@ export interface PayloadInfo {
 }
 
 /**
- * Resolve the agent-payload directory shipped in the packaged app's
- * resources. Returns null for thin builds (stub manifest with thin:true),
- * dev runs (no resourcesPath), or unreadable manifests — every caller treats
- * null as "behave exactly like today's network bootstrap".
+ * Resolve the agent-payload directory that ships in the resources of the
+ * packaged app. Returns null for thin builds (a stub manifest with
+ * thin:true), for dev runs (no resourcesPath), and for unreadable manifests.
+ * Every caller treats null as "behave exactly like the current network
+ * bootstrap".
  */
 export function resolvePayload(
   resourcesPath: string | null | undefined,
@@ -58,7 +60,7 @@ export function resolvePayload(
   return { dir, tag: typeof parsed.tag === 'string' ? parsed.tag : null, items }
 }
 
-/** Installer argv addition for a payload-backed bootstrap. */
+/** Build the extra installer arguments for a payload-backed bootstrap. */
 export function payloadArgs(installerKind: 'posix' | 'powershell', payload: PayloadInfo | null): string[] {
   if (!payload) {
     return []
@@ -70,19 +72,23 @@ export function payloadArgs(installerKind: 'posix' | 'powershell', payload: Payl
 // ─── marker-tag invalidation ────────────────────────────────────────────────
 
 /**
- * Does the completed-bootstrap marker need invalidating because the app
- * updated to a build carrying NEWER payloads?
+ * Decide if the completed-bootstrap marker is stale because the app updated
+ * to a build that carries NEWER payloads.
  *
- * True only when this build ships payloads (stamp.payload) with a real tag,
- * the checkout's install manifest says installMode:bundled (it opted into
- * desktop-managed materialization), AND the marker's pinnedTag differs.
+ * Returns true only when all of these conditions are true:
+ * - This build ships payloads (stamp.payload) with a real tag.
+ * - The install manifest of the checkout says installMode:bundled. That
+ *   means the checkout opted into desktop-managed materialization.
+ * - The pinnedTag of the marker differs from the stamp tag.
  *
- * Deliberately false for everything else:
- * - no install manifest (legacy checkout) — ONLY the adoption flow, with its
- *   pristineness gates, may move a legacy checkout. Re-materializing here
- *   would be silent adoption without consent checks.
- * - installMode:source (ejected / user-managed) — the user owns updates.
- * - thin builds, missing marker (normal bootstrap-needed logic owns that).
+ * Returns false, deliberately, for all other inputs:
+ * - No install manifest (a legacy checkout). ONLY the adoption flow, with
+ *   its pristineness gates, can move a legacy checkout. Re-materialization
+ *   here is silent adoption without consent checks.
+ * - installMode:source (an ejected or user-managed checkout). The user owns
+ *   the updates.
+ * - Thin builds, and a missing marker. The normal bootstrap-needed logic
+ *   owns those cases.
  */
 export function needsRematerialization(
   marker: { pinnedTag?: string | null } | null,
@@ -115,9 +121,9 @@ export interface AdoptionFacts {
   gitCheckoutExists: boolean
   workingTreeClean: boolean
   currentBranch: string | null
-  headIsAncestorOfTag: boolean | null // null = could not determine (offline, fetch failed)
+  headIsAncestorOfTag: boolean | null // null = unknown (offline, or the fetch failed)
   // From update-state:
-  recentManualUpdateDays: number | null // null = never / unknown
+  recentManualUpdateDays: number | null // null = never fetched, or unknown
 }
 
 export type AdoptionDecision =
@@ -127,11 +133,12 @@ export type AdoptionDecision =
 export const RECENT_MANUAL_UPDATE_WINDOW_DAYS = 30
 
 /**
- * Should this launch silently adopt the checkout into the bundled path?
+ * Decide if this launch adopts the checkout into the bundled path silently.
  *
- * The bias is "when unsure, don't adopt": every ambiguous or unverifiable
- * input returns adopt:false with a reason (logged, never shown to the user —
- * failure to adopt is silent and retried at a later launch/release).
+ * The bias is: when unsure, do not adopt. Every ambiguous or unverifiable
+ * input returns adopt:false with a reason. The reason is logged and never
+ * shown to the user. A refused adoption is silent, and a later launch or
+ * release tries again.
  */
 export function decideAdoption(facts: AdoptionFacts): AdoptionDecision {
   if (!facts.stampHasPayload || !facts.stampTag) {
@@ -154,10 +161,10 @@ export function decideAdoption(facts: AdoptionFacts): AdoptionDecision {
     }
 
     // A manifest with installMode:source but NO manageStyle is a deliberate
-    // source install (written by install.sh without payloads) — legacy
-    // checkouts have no manifest at all. Both are adoptable per plan §1.4
-    // only when style is absent; mode source alone doesn't opt out, the
-    // remaining pristine checks decide.
+    // source install. install.sh writes this manifest when it has no
+    // payloads. Legacy checkouts have no manifest at all. Per plan §1.4,
+    // both are adoptable only when manageStyle is absent. installMode:source
+    // alone does not opt out. The remaining pristine checks decide.
   }
 
   if (!facts.gitCheckoutExists) {
@@ -196,9 +203,10 @@ export function decideAdoption(facts: AdoptionFacts): AdoptionDecision {
 }
 
 /**
- * The manifest to write after a successful adoption. auto-adopted is kept
- * distinct from adopted so a bad auto-adoption cohort can be bulk-reverted
- * without touching users who chose bundled explicitly.
+ * Build the manifest to write after a successful adoption. The manifest
+ * keeps auto-adopted distinct from adopted. Thus we can bulk-revert a bad
+ * auto-adoption cohort without a change for users who chose bundled
+ * explicitly.
  */
 export function adoptionManifest(tag: string) {
   return {
@@ -215,10 +223,11 @@ export function adoptionManifest(tag: string) {
 export type GitRunner = (args: string[], cwd: string) => { code: number; stdout: string }
 
 /**
- * Gather the git-side AdoptionFacts for a checkout. Network is touched only
- * for the ancestry probe (a tag-scoped fetch; --unshallow first when the
- * checkout is a depth-1 installer clone). Every failure degrades to the
- * "don't adopt" side of the fact: null ancestry, dirty tree, etc.
+ * Gather the git-side AdoptionFacts for a checkout. Only the ancestry probe
+ * touches the network. That probe is a tag-scoped fetch, with --unshallow
+ * first when the checkout is a depth-1 installer clone. Every failure
+ * degrades to the "do not adopt" side of the fact, for example null
+ * ancestry or a dirty tree.
  */
 export function gatherGitFacts(
   activeRoot: string,
@@ -231,9 +240,10 @@ export function gatherGitFacts(
     return { gitCheckoutExists: false, workingTreeClean: false, currentBranch: null, headIsAncestorOfTag: null }
   }
 
-  // -uno: untracked files don't block adoption (mirrors write-build-stamp's
-  // dirty probe and install.sh's lockfile-churn tolerance is upstream of us —
-  // npm churn shows as tracked modifications, which DO block. Conservative.)
+  // -uno: untracked files do not block adoption. This mirrors the dirty
+  // probe of write-build-stamp. The lockfile-churn tolerance of install.sh
+  // is upstream of us. npm churn shows as tracked modifications, and those
+  // DO block adoption. This is conservative.
   const status = git(['status', '--porcelain', '-uno'], activeRoot)
   const workingTreeClean = status.code === 0 && status.stdout.trim() === ''
 
@@ -258,7 +268,7 @@ export function gatherGitFacts(
     if (fetch.code === 0) {
       const ancestor = git(['merge-base', '--is-ancestor', 'HEAD', `${tag}^{commit}`], activeRoot)
 
-      // merge-base --is-ancestor: 0 = yes, 1 = no, anything else = error.
+      // merge-base --is-ancestor: 0 = yes, 1 = no, other codes = error.
       headIsAncestorOfTag = ancestor.code === 0 ? true : ancestor.code === 1 ? false : null
     }
   }
@@ -267,12 +277,12 @@ export function gatherGitFacts(
 }
 
 /**
- * Execute an adoption the decision already approved: fast-forward main to
- * the release tag. Returns true on success; on any failure the caller leaves
- * the checkout in source mode (the reflog preserves the previous state, and
- * checkout -B is itself atomic per-ref — no partial adoption state exists).
- * The caller re-runs the bootstrap afterwards so venv/js re-materialize from
- * payloads, then writes adoptionManifest().
+ * Execute an adoption that the decision already approved: fast-forward main
+ * to the release tag. Returns true on success. On any failure, the caller
+ * leaves the checkout in source mode. The reflog keeps the previous state,
+ * and checkout -B is atomic per ref, so no partial adoption state exists.
+ * The caller then re-runs the bootstrap, so the venv and js re-materialize
+ * from payloads. Then the caller writes adoptionManifest().
  */
 export function executeAdoptionCheckout(activeRoot: string, tag: string, git: GitRunner): boolean {
   return git(['checkout', '-B', 'main', `${tag}^{commit}`], activeRoot).code === 0

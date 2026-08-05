@@ -33,7 +33,7 @@ test('resolvePayload returns null for dev runs, thin stubs, and garbage', () => 
     null
   )
   assert.equal(resolvePayload('/res', readerFor('not-an-object')), null)
-  // Manifest with items but nothing actually staged ⇒ null (all-skipped payload).
+  // A manifest with items but no staged item returns null (an all-skipped payload).
   assert.equal(
     resolvePayload('/res', readerFor({ tag: 'v1.0.0', items: { repo: { status: 'skipped' } } })),
     null
@@ -68,9 +68,9 @@ test('never fires for thin builds, missing markers, or non-bundled checkouts', (
   assert.equal(needsRematerialization({ pinnedTag: 'v1.0.0' }, { payload: false, tag: null }, bundledManifest), false)
   assert.equal(needsRematerialization({ pinnedTag: 'v1.0.0' }, null, bundledManifest), false)
   assert.equal(needsRematerialization(null, bundledStamp, bundledManifest), false)
-  // Ejected / source-managed: user owns updates.
+  // Ejected or source-managed checkouts: the user owns the updates.
   assert.equal(needsRematerialization({ pinnedTag: 'v1.0.0' }, bundledStamp, { installMode: 'source' }), false)
-  // Legacy checkout without a manifest: only adoption may touch it.
+  // A legacy checkout has no manifest. Only adoption can change it.
   assert.equal(needsRematerialization({ pinnedTag: 'v1.0.0' }, bundledStamp, null), false)
 })
 
@@ -115,8 +115,9 @@ test('every non-pristine variation refuses, with a reason', () => {
 })
 
 test('a plain source manifest without manageStyle stays adoptable', () => {
-  // install.sh writes {installMode: source, channel: main} with NO style on
-  // network installs — those users are exactly the silent-adoption cohort.
+  // install.sh writes {installMode: source, channel: main} with NO
+  // manageStyle on network installs. Those users are the silent-adoption
+  // cohort.
   const decision = decideAdoption({ ...pristine, installManifest: { installMode: 'source' } })
   assert.deepEqual(decision, { adopt: true })
 })

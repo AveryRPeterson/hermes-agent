@@ -3623,15 +3623,16 @@ function readBootstrapMarker() {
 
 // ─── Silent adoption of pristine legacy checkouts (plan §1.4) ───────────────
 //
-// Runs once per launch, BEFORE backend resolution reads the marker/manifest:
-// a bundled build meeting a pristine legacy checkout (no install manifest,
-// clean tree, on main, HEAD an ancestor of the payload tag) fast-forwards it
-// to the release tag and marks it bundled/auto-adopted. Every ambiguous
-// input skips silently — failure to adopt just means the checkout keeps
-// booting through the legacy path, and we retry at a future launch/release.
-// Runs at launch (fresh process, backend not yet spawned) and NEVER inside
-// `hermes update` — the update process executes post-pull steps from
-// pre-pull modules, so it only ever stages; fresh processes apply.
+// This flow runs once per launch, BEFORE backend resolution reads the
+// marker and the manifest. A bundled build can meet a pristine legacy
+// checkout: no install manifest, a clean tree, on main, and HEAD an
+// ancestor of the payload tag. Then the flow fast-forwards the checkout to
+// the release tag and marks it bundled/auto-adopted. Every ambiguous input
+// skips silently. A refused adoption means the checkout boots through the
+// legacy path, and a future launch or release tries again. The flow runs
+// at launch, in a fresh process, before the backend spawns. It NEVER runs
+// inside `hermes update`. The update process executes post-pull steps from
+// pre-pull modules, so it only stages. Fresh processes apply.
 
 const INSTALL_MANIFEST_PATH = path.join(ACTIVE_HERMES_ROOT, '.hermes-install.json')
 
@@ -3651,8 +3652,9 @@ const adoptionGitRunner: GitRunner = (args, cwd) => {
   }
 }
 
-/** Days since the checkout's last fetch (FETCH_HEAD mtime) — conservative
- * proxy for "someone is actively running hermes update here". null = never. */
+/** Count the days since the last fetch of the checkout (FETCH_HEAD mtime).
+ * This is a conservative proxy for "a person runs hermes update here".
+ * Returns null when no fetch occurred. */
 function daysSinceLastFetch(activeRoot: string): number | null {
   try {
     const st = fs.statSync(path.join(activeRoot, '.git', 'FETCH_HEAD'))
@@ -3667,8 +3669,8 @@ function maybeAutoAdopt() {
   try {
     const stamp = INSTALL_STAMP as any
 
-    // Thin builds can never adopt — skip before spawning any git probes
-    // (this is every dev run and every current CI build).
+    // Thin builds can never adopt. Skip before any git probe spawns.
+    // Every dev run and every current CI build is a thin build.
     if (stamp?.payload !== true || !stamp?.tag) {
       return false
     }
@@ -3704,9 +3706,10 @@ function maybeAutoAdopt() {
       JSON.stringify(adoptionManifest(stamp.tag), null, 2) + '\n',
       'utf8'
     )
-    // Do NOT touch the bootstrap marker here: its pinnedTag still names the
-    // previous materialization, so needsRematerialization() now fires and the
-    // normal bootstrap path re-materializes venv/js offline from payloads.
+    // Do NOT touch the bootstrap marker here. Its pinnedTag still names the
+    // previous materialization, so needsRematerialization() now fires. Then
+    // the normal bootstrap path re-materializes the venv and js offline
+    // from payloads.
     rememberLog('[adopt] adopted into the bundled path (manageStyle: auto-adopted)')
 
     return true
@@ -3752,9 +3755,10 @@ function writeBootstrapMarker(payload) {
     schemaVersion: BOOTSTRAP_MARKER_SCHEMA_VERSION,
     pinnedCommit: payload.pinnedCommit || null,
     pinnedBranch: payload.pinnedBranch || null,
-    // Bundled builds: which payload tag this bootstrap materialized (null on
-    // thin/network bootstraps). Compared against the stamp tag at launch to
-    // trigger offline re-materialization after an app update.
+    // Bundled builds: the payload tag that this bootstrap materialized. The
+    // value is null on thin and network bootstraps. At launch, a comparison
+    // against the stamp tag triggers offline re-materialization after an
+    // app update.
     pinnedTag: payload.pinnedTag || null,
     completedAt: new Date().toISOString(),
     desktopVersion: app.getVersion()
@@ -3982,12 +3986,13 @@ function createActiveBackend(backendArgs) {
 }
 
 function resolveHermesBackend(backendArgs) {
-  // 0. Bundled builds: consider silently adopting a pristine legacy checkout
-  //    into the bundled path (plan §1.4). Must run before anything below
-  //    reads the marker / install manifest — adoption rewrites both. No-op
-  //    on thin builds and every non-pristine checkout; a successful adoption
-  //    leaves the marker's pinnedTag stale on purpose so the
-  //    re-materialization branch below re-runs the (now offline) bootstrap.
+  // 0. Bundled builds: decide if a pristine legacy checkout adopts silently
+  //    into the bundled path (plan §1.4). This must run before the code
+  //    below reads the marker or the install manifest, because adoption
+  //    rewrites both. It is a no-op on thin builds and on every
+  //    non-pristine checkout. A successful adoption leaves the pinnedTag of
+  //    the marker stale on purpose. Then the re-materialization branch
+  //    below re-runs the bootstrap, which is now offline.
   maybeAutoAdopt()
 
   // 1. Explicit override -- HERMES_DESKTOP_HERMES_ROOT points at a developer
@@ -4024,12 +4029,13 @@ function resolveHermesBackend(backendArgs) {
   //    bootstrap when the runtime itself is unusable.
   const activeRuntime = activeRuntimeState()
 
-  // Bundled builds: if the app updated (stamp tag ≠ marker pinnedTag), the
-  // runtime on disk was materialized from the PREVIOUS release's payloads.
-  // Re-run the bootstrap — it sources offline from the new payloads and the
-  // install.sh/ps1 repository stage refuses ejected (source-mode) checkouts,
-  // so a user-managed agent is never touched (needsRematerialization also
-  // short-circuits on installMode:source to skip the pointless re-run).
+  // Bundled builds: if the app updated (the stamp tag differs from the
+  // marker pinnedTag), the payloads of the PREVIOUS release materialized
+  // the runtime on disk. Re-run the bootstrap. It sources offline from the
+  // new payloads. The repository stage of install.sh/ps1 refuses ejected
+  // (source-mode) checkouts, so a user-managed agent is never touched.
+  // needsRematerialization also short-circuits on installMode:source to
+  // skip the unnecessary re-run.
   const rematerializationNeeded =
     activeRuntime.shouldUseActiveRuntime &&
     !bootstrapRepairRequested &&
@@ -4065,8 +4071,9 @@ function resolveHermesBackend(backendArgs) {
   //    do NOT write a bootstrap marker; the user did this themselves and we
   //    don't want to take ownership of an install we didn't perform.
   //    HERMES_DESKTOP_IGNORE_EXISTING=1 forces the bootstrap path for testing.
-  //    Skipped when re-materialization is pending: the PATH hermes typically
-  //    points into the very ACTIVE_HERMES_ROOT venv we're about to refresh.
+  //    This step is skipped when re-materialization is pending. The PATH
+  //    hermes usually points into the ACTIVE_HERMES_ROOT venv that we are
+  //    about to refresh.
   if (process.env.HERMES_DESKTOP_IGNORE_EXISTING !== '1' && !rematerializationNeeded) {
     let hermesCommand = null
     const hermesOverride = process.env.HERMES_DESKTOP_HERMES
@@ -4250,9 +4257,10 @@ async function ensureRuntime(backend) {
       hermesHome: HERMES_HOME,
       logRoot: path.join(HERMES_HOME, 'logs'),
       abortSignal: bootstrapAbortController.signal,
-      // Bundled builds carry an agent-payload tree in resources; the install
-      // stages source from it offline (per-item fallback to network). Thin
-      // builds resolve null and bootstrap exactly as before.
+      // Bundled builds carry an agent-payload tree in resources. The
+      // install stages source from it offline, with a per-item fallback to
+      // the network. Thin builds resolve null and bootstrap exactly as
+      // before.
       payloadDir: (resolvePayload(process.resourcesPath) || ({} as any)).dir || null,
       onEvent: ev => {
         // Tee every bootstrap event to (a) the desktop log for forensics

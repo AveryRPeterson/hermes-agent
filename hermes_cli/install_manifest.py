@@ -1,12 +1,12 @@
-"""Install-manifest plumbing for bundled desktop installs.
+"""Install-manifest functions for bundled desktop installs.
 
-``.hermes-install.json`` is a small, code-scoped marker written next to the
-managed checkout (the parent of ``hermes_cli/`` — same anchoring rationale as
-``.install_method`` in ``hermes_cli/config.py``: it describes *the running
-code*, not ``$HERMES_HOME``, so two installs sharing one data directory can't
-poison each other).
+``.hermes-install.json`` is a small marker file next to the managed checkout.
+It sits in the parent directory of ``hermes_cli/``. This is the same anchor
+rule as ``.install_method`` in ``hermes_cli/config.py``. The marker describes
+the running code, not ``$HERMES_HOME``. Two installs that share one data
+directory cannot overwrite each other's marker.
 
-It records where a checkout came from and where its updates come from:
+The file records where a checkout came from and where its updates come from:
 
     {
       "schemaVersion": 1,
@@ -19,35 +19,36 @@ It records where a checkout came from and where its updates come from:
 
 Semantics
 ---------
-* ``installMode: "source"`` — the checkout is user-managed; ``hermes update``
-  (git pull / tag checkout / ZIP fallback) owns updates. **Absence of the file
-  means source mode** — every install that exists today is a source install,
-  so back-compat is total and nothing needs migrating.
-* ``installMode: "bundled"`` — the checkout was materialized from payloads
-  shipped inside the desktop installer. The desktop app owns updates (it
-  re-materializes the checkout offline after the app itself updates), so
-  ``hermes update`` refuses and points at the in-app updater.
-* ``channel`` — ``"main"`` tracks the git main branch (source mode only);
-  ``"stable"`` tracks tagged releases. The effective channel resolution lives
-  in :func:`resolve_update_channel`; ``update.channel`` in config.yaml can
-  override for source installs, while bundled installs are always stable.
-* ``manageStyle`` — provenance: HOW the install got into its current mode,
-  where ``installMode`` says where it is now. Vocabulary:
+* ``installMode: "source"`` — the user manages the checkout. ``hermes update``
+  owns updates (git pull, tag checkout, or ZIP fallback). **A missing file
+  means source mode.** Every install that exists today is a source install.
+  No migration is necessary.
+* ``installMode: "bundled"`` — the checkout came from payloads inside the
+  desktop installer. The desktop app owns updates. It rebuilds the checkout
+  offline after the app updates itself. ``hermes update`` refuses and points
+  at the in-app updater.
+* ``channel`` — ``"main"`` follows the git main branch (source mode only).
+  ``"stable"`` follows tagged releases. :func:`resolve_update_channel` gives
+  the effective channel. ``update.channel`` in config.yaml can override the
+  channel for source installs. Bundled installs are always stable.
+* ``manageStyle`` — how the install got into its current mode.
+  ``installMode`` says where it is now. Values:
 
-  - ``"adopted"`` — user chose bundled explicitly (fresh installer run).
-  - ``"auto-adopted"`` — a pristine legacy checkout was silently migrated
-    into the bundled path by the desktop app at launch. Kept distinct from
-    ``"adopted"`` so a bad auto-adoption cohort can be bulk-reverted without
-    touching anyone who consented.
-  - ``"ejected"`` — user ran ``hermes update --eject``. STICKY opt-out:
-    auto-adoption must never touch a checkout that says ejected, even though
-    its ``installMode`` is plain ``"source"``.
-  - absent — legacy checkout that predates manifests (or a plain source
-    install); the only state auto-adoption may consider.
+  - ``"adopted"`` — the user selected a bundled install (installer run).
+  - ``"auto-adopted"`` — the desktop app silently moved a clean legacy
+    checkout into the bundled path at launch. This value is different from
+    ``"adopted"`` for one reason: a bad auto-adoption group can be reverted
+    without touching users who gave consent.
+  - ``"ejected"`` — the user ran ``hermes update --eject``. This opt-out is
+    permanent. Auto-adoption must not touch an ejected checkout, although
+    its ``installMode`` is ``"source"``.
+  - missing — a legacy checkout from before manifests, or a plain source
+    install. Auto-adoption examines only this state.
 
-Pure-stdlib leaf module: no imports from hermes_cli.config (config imports
-would drag the full config machinery into every consumer; the desktop
-bootstrap and install scripts also write this file without Python).
+This is a pure-stdlib leaf module. It does not import hermes_cli.config.
+A config import would pull the full config machinery into every consumer.
+The desktop bootstrap and the install scripts also write this file without
+Python.
 """
 
 import json
@@ -80,8 +81,8 @@ CHANNEL_AUTO = "auto"
 def _default_manifest() -> dict:
     """The implicit manifest for a checkout with no ``.hermes-install.json``.
 
-    Source mode on the main channel — i.e. exactly today's behavior, so
-    pre-manifest installs (all of them) are unaffected.
+    Source mode on the main channel. This is the current behavior, so
+    installs from before manifests do not change.
     """
     return {
         "schemaVersion": INSTALL_MANIFEST_SCHEMA_VERSION,
@@ -97,13 +98,14 @@ def install_manifest_path(project_root: Optional[Path] = None) -> Path:
 
 
 def read_install_manifest(project_root: Optional[Path] = None) -> dict:
-    """Read and sanitize the install manifest.
+    """Read the install manifest and correct bad values.
 
-    Never raises: a missing, unreadable, or malformed file — or one with
-    out-of-vocabulary ``installMode``/``channel`` values (e.g. written by a
-    FUTURE Hermes with a bigger vocabulary) — degrades to the source/main
-    default rather than bricking update logic. Unknown extra keys are
-    preserved so round-tripping a future manifest doesn't strip fields.
+    This function does not raise errors. A missing, unreadable, or malformed
+    file falls back to the source/main default. Unknown ``installMode`` or
+    ``channel`` values (for example, from a future Hermes with more values)
+    also fall back. This keeps the update logic safe. The function keeps
+    unknown extra keys, so a round trip of a future manifest does not remove
+    fields.
     """
     path = install_manifest_path(project_root)
     try:
@@ -123,11 +125,12 @@ def read_install_manifest(project_root: Optional[Path] = None) -> dict:
         manifest["installMode"] = MODE_SOURCE
     if manifest.get("channel") not in _VALID_CHANNELS:
         manifest["channel"] = CHANNEL_MAIN if manifest["installMode"] == MODE_SOURCE else CHANNEL_STABLE
-    # Unknown manageStyle values are DROPPED, not defaulted: an absent style
-    # means "adoption may consider this checkout", and inventing one would
-    # either wrongly block adoption or (worse) erase an eject opt-out written
-    # by a future vocabulary. EXCEPTION: anything that *smells* ejected stays
-    # ejected — the opt-out must survive vocabulary drift in both directions.
+    # Drop unknown manageStyle values. Do not replace them with a default.
+    # A missing style means "adoption can examine this checkout". An invented
+    # style can block adoption in error, or worse, remove an eject opt-out
+    # that a future vocabulary wrote. Exception: a value that contains
+    # "eject" stays ejected. The opt-out must survive vocabulary changes in
+    # both directions.
     style = manifest.get("manageStyle")
     if style is not None and style not in _VALID_STYLES:
         if isinstance(style, str) and "eject" in style.lower():
@@ -142,11 +145,12 @@ def write_install_manifest(
     manifest: dict,
     project_root: Optional[Path] = None,
 ) -> Path:
-    """Atomically write the manifest (tmp + rename); returns the path written.
+    """Write the manifest atomically (tmp file + rename). Return the path.
 
-    Validates mode/channel up front — writing garbage is worse than raising,
-    because every reader silently degrades garbage to source/main and the
-    caller's intent (e.g. marking an install bundled) would be quietly lost.
+    The function validates mode, channel, and style before the write. A bad
+    write is worse than an error: every reader silently converts bad values
+    to source/main, and the caller's intent (for example, to mark an install
+    bundled) is lost without a signal.
     """
     if manifest.get("installMode") not in _VALID_MODES:
         raise ValueError(f"invalid installMode: {manifest.get('installMode')!r}")
@@ -166,16 +170,16 @@ def write_install_manifest(
 
 
 def is_bundled_install(project_root: Optional[Path] = None) -> bool:
-    """True when the running checkout was materialized from desktop payloads."""
+    """True when the running checkout came from desktop payloads."""
     return read_install_manifest(project_root).get("installMode") == MODE_BUNDLED
 
 
 def is_ejected(project_root: Optional[Path] = None) -> bool:
-    """True when the user explicitly ejected this checkout from desktop management.
+    """True when the user ejected this checkout from desktop management.
 
-    The sticky opt-out signal for auto-adoption: an ejected checkout must
-    never be silently re-adopted into the bundled path, even though its
-    ``installMode`` is plain ``source``.
+    This is the permanent opt-out signal for auto-adoption. Auto-adoption
+    must not move an ejected checkout back into the bundled path, although
+    its ``installMode`` is ``source``.
     """
     return read_install_manifest(project_root).get("manageStyle") == STYLE_EJECTED
 
@@ -184,15 +188,15 @@ def resolve_update_channel(
     config: Optional[dict] = None,
     project_root: Optional[Path] = None,
 ) -> str:
-    """Effective update channel for this install.
+    """Give the effective update channel for this install.
 
     Resolution order:
-    1. Bundled installs are ALWAYS ``stable`` — the desktop app re-materializes
-       from tagged release payloads; a config override can't change what the
-       installer ships. (Ejecting flips the manifest to source mode first.)
-    2. ``update.channel`` in config.yaml (``stable`` / ``main``) when set to a
-       real channel; ``auto``/empty/unknown fall through.
-    3. The manifest's own channel (source default: ``main``).
+    1. Bundled installs are always ``stable``. The desktop app rebuilds the
+       checkout from tagged release payloads. A config override cannot change
+       what the installer ships. Eject first to change this.
+    2. ``update.channel`` from config.yaml, when it is ``stable`` or ``main``.
+       The values ``auto``, empty, and unknown fall through.
+    3. The channel from the manifest. The source default is ``main``.
     """
     manifest = read_install_manifest(project_root)
     if manifest.get("installMode") == MODE_BUNDLED:
@@ -212,12 +216,12 @@ def resolve_update_channel(
 def format_bundled_update_message() -> str:
     """Refusal text for ``hermes update`` on a bundled install."""
     return (
-        "✗ This Hermes install is managed by the Hermes desktop app.\n"
+        "✗ The Hermes desktop app manages this Hermes install.\n"
         "\n"
-        "The desktop app updates the agent together with itself — use the\n"
-        "in-app updater (Settings → Check for updates) instead of `hermes update`.\n"
+        "The desktop app updates the agent together with itself. Use the\n"
+        "in-app updater (Settings → Check for updates), not `hermes update`.\n"
         "\n"
-        "To manage this checkout yourself with `hermes update` (git-based\n"
-        "updates), eject it from desktop management first. Ejecting keeps the\n"
-        "desktop app auto-updating itself, but leaves the agent checkout to you."
+        "If you want to manage this checkout yourself with `hermes update`,\n"
+        "eject it from desktop management first. After an eject, the desktop\n"
+        "app continues to update itself, but the agent checkout is yours."
     )

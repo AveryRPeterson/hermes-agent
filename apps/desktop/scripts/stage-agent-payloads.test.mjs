@@ -22,7 +22,7 @@ test('resolveTargets covers every shipping (platform, arch) pair', () => {
     ['win32', 'arm64']
   ]) {
     const t = resolveTargets(platform, arch)
-    // Invariant: every target fully specifies all three toolchain descriptors.
+    // Invariant: every target specifies all three toolchain descriptors.
     assert.ok(t.uvTarget && t.pythonPlatform && t.nodeDist, `${platform}-${arch}`)
     assert.equal(t.platform, platform)
     assert.equal(t.arch, arch)
@@ -44,9 +44,10 @@ test('windows targets map to msvc toolchains, darwin to apple, linux to gnu', ()
 
 test('wheel fetch refuses sdists and targets the wheelhouse dir', () => {
   const args = wheelDownloadArgs({ wheelsDir: '/out/wheels' })
-  // Invariants: frozen-lockfile-derived requirements and binary-only (an
-  // sdist in the payload would try to compile at first launch — offline,
-  // no toolchain). Native fetch: no --platform cross-tags belong here.
+  // Invariants: the requirements come from the frozen lockfile, and the
+  // fetch is binary-only. An sdist in the payload tries to compile at
+  // first launch, which is offline and has no toolchain. The fetch is
+  // native, so no --platform cross-tags belong here.
   assert.equal(args[0], 'wheel')
   assert.ok(args.includes('--only-binary'))
   assert.equal(args[args.indexOf('-r') + 1], 'requirements-payload.txt')
@@ -88,14 +89,14 @@ test('manifest records staged vs explicitly-skipped vs failed per item', () => {
     skipped: new Set(['wheels'])
   })
   assert.equal(manifest.tag, 'v1.0.0')
-  // Invariant: every payload item has an entry — the bootstrap's per-stage
-  // fallback logic reads presence, absence would be ambiguous.
+  // Invariant: every payload item has an entry. The per-stage fallback
+  // logic of the bootstrap reads presence. An absent entry is ambiguous.
   for (const item of PAYLOAD_ITEMS) {
     assert.ok(manifest.items[item], item)
   }
   assert.equal(manifest.items.repo.status, 'staged')
   assert.equal(manifest.items.wheels.status, 'skipped')
   assert.equal(manifest.items.wheels.reason, 'explicit-skip')
-  // node was neither staged nor explicitly skipped ⇒ failed.
+  // node was not staged and not explicitly skipped, so its status is failed.
   assert.equal(manifest.items.node.reason, 'failed')
 })

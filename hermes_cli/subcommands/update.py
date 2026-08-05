@@ -78,11 +78,12 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         action="store_true",
         default=False,
         help=(
-            "Take over update management of a desktop-bundled install: mark "
-            "the checkout as source-managed (git updates via `hermes update`) "
-            "and fetch full git history. The desktop app keeps updating "
-            "itself, but no longer touches the agent checkout. No effect on "
-            "installs that are already source-managed."
+            "Take control of updates for a desktop-bundled install. This "
+            "option marks the checkout as source-managed (git updates with "
+            "`hermes update`) and fetches the full git history. The desktop "
+            "app continues to update itself, but it no longer touches the "
+            "agent checkout. This option has no effect on installs that are "
+            "already source-managed."
         ),
     )
     update_parser.add_argument(
@@ -91,9 +92,10 @@ def build_update_parser(subparsers, *, cmd_update: Callable) -> None:
         choices=("stable", "main"),
         metavar="CHANNEL",
         help=(
-            "With --eject: which releases the ejected install tracks — "
-            "'stable' (tagged releases) or 'main' (git main branch, the "
-            "pre-eject desktop cadence is 'stable'). Defaults to 'main'."
+            "With --eject: the releases that the ejected install tracks. Use "
+            "'stable' for tagged releases or 'main' for the git main branch. "
+            "The desktop cadence before the eject is 'stable'. The default "
+            "is 'main'."
         ),
     )
     update_parser.set_defaults(func=cmd_update)
