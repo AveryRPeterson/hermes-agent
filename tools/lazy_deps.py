@@ -593,7 +593,23 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
 
 
 def _spec_is_safe(spec: str) -> bool:
-    """Reject pip specs that contain URLs, paths, or shell metacharacters."""
+    """Reject a pip spec that is not a plain name-and-version requirement.
+
+    This guards :func:`install_specs` only. That function takes its specs
+    from ``pip_dependencies`` in a plugin manifest, and a user can install a
+    plugin from ~/.hermes/plugins, so the strings are not ours.
+
+    :func:`ensure` needs no such check. Its specs come from the extras in
+    pyproject.toml, which the repository owns and uv.lock pins.
+
+    Each spec becomes one argv entry, and no caller uses ``shell=True``, so a
+    metacharacter cannot reach a shell. The dangerous shapes are the ones
+    that pip itself acts on:
+
+      --index-url=http://evil/   pip reads an attacker's index
+      git+https://host/repo      pip runs setup.py from that repository
+      /tmp/evil, ./evil          pip installs a local tree
+    """
     if not spec or len(spec) > 200:
         return False
     if any(ch in spec for ch in (";", "|", "&", "`", "$", "\n", "\r", "\t", "\\")):
@@ -1136,14 +1152,6 @@ def ensure(feature: str, *, prompt: bool = True) -> None:
                 actionable=False,
             )
 
-    # Validate every spec against the allowlist + safety regex. Belt and
-    # braces — the keys-in-LAZY_DEPS check above already constrains this.
-    for spec in missing:
-        if not _spec_is_safe(spec):
-            raise FeatureUnavailable(
-                feature, missing,
-                f"refusing to install unsafe spec {spec!r}"
-            )
 
     if not _allow_lazy_installs():
         sealed = _sealed_venv_reason()
