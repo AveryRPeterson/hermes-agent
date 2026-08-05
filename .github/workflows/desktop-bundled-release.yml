@@ -108,6 +108,13 @@ jobs:
           command: npm ci
 
       # ── uv + Python (native to this runner) ───────────────────────────
+      # setup-python gives every OS a working `python3` on PATH. The desktop
+      # `npm run build` shells out to scripts/write_install_stamp.py, and the
+      # Windows runner image does not guarantee a python3 alias.
+      - uses: actions/setup-python@e348410e00f449ece8581cb8e88be8f0e7712da6 # v5
+        with:
+          python-version: '3.12'
+
       - name: Install uv
         uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
         with:

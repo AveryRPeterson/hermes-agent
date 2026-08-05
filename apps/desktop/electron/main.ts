@@ -511,6 +511,11 @@ function loadInstallStamp() {
           builtAt: parsed.builtAt || null,
           dirty: Boolean(parsed.dirty),
           source: parsed.source || null,
+          // Bundled desktop builds: payload marks the artifact as carrying
+          // offline agent payloads, tag pins the release they came from.
+          // bundled-runtime.ts and the app updater key on these two.
+          payload: parsed.payload === true,
+          tag: typeof parsed.tag === 'string' && parsed.tag ? parsed.tag : null,
           path: p
         })
       }
