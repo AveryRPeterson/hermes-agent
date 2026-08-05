@@ -81,6 +81,41 @@ test('resolveStamp falls back when neither CI nor git is available', () => {
     commit: FALLBACK_COMMIT,
     branch: FALLBACK_BRANCH,
     dirty: false,
-    source: 'fallback'
+    source: 'fallback',
+    payload: false,
+    tag: null
   })
+})
+
+test('thin builds carry payload:false and no tag regardless of HERMES_PAYLOAD_TAG', () => {
+  const stamp = resolveStamp({
+    env: { GITHUB_SHA: 'a'.repeat(40), HERMES_PAYLOAD_TAG: 'v9.9.9' },
+    execFn: () => null
+  })
+  assert.equal(stamp.payload, false)
+  assert.equal(stamp.tag, null)
+})
+
+test('bundled builds record payload:true + the pinned tag', () => {
+  const stamp = resolveStamp({
+    env: {
+      GITHUB_SHA: 'b'.repeat(40),
+      HERMES_DESKTOP_BUNDLED: '1',
+      HERMES_PAYLOAD_TAG: 'v0.18.0'
+    },
+    execFn: () => null
+  })
+  assert.equal(stamp.payload, true)
+  assert.equal(stamp.tag, 'v0.18.0')
+})
+
+test('bundled build without a tag is a hard error, not a silent thin build', () => {
+  assert.throws(
+    () =>
+      resolveStamp({
+        env: { GITHUB_SHA: 'b'.repeat(40), HERMES_DESKTOP_BUNDLED: '1' },
+        execFn: () => null
+      }),
+    /HERMES_PAYLOAD_TAG/
+  )
 })
