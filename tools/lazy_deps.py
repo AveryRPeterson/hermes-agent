@@ -73,9 +73,6 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from packaging.requirements import InvalidRequirement, Requirement
-from packaging.version import InvalidVersion, Version
-
 from hermes_cli._subprocess_compat import windows_hide_flags
 
 logger = logging.getLogger(__name__)
@@ -571,14 +568,22 @@ def _unsupported_feature_reason(feature: str) -> Optional[str]:
     return None
 
 
-def _parse_spec(spec: str) -> Optional[Requirement]:
-    """Parse a PEP 508 spec, or return None when it is malformed.
+def _parse_spec(spec: str):
+    """Parse a PEP 508 spec, or return None when it is not usable.
 
     ``packaging`` is a core dependency, so use it. A regex over a spec has
     to re-handle the extras block, the version set and the environment
     marker, and getting the marker wrong makes a specifier unparseable
     ("==2.1.6; platform_system == 'Darwin'").
+
+    Import it here, not at module scope. hermes_bootstrap imports this
+    module during startup, before a broken venv has been repaired, and a
+    missing package must not stop Hermes from starting.
     """
+    try:
+        from packaging.requirements import InvalidRequirement, Requirement
+    except ImportError:  # pragma: no cover - packaging is a core dependency
+        return None
     try:
         return Requirement(spec)
     except InvalidRequirement:
@@ -616,6 +621,8 @@ def _is_satisfied(spec: str) -> bool:
     if not req.specifier:
         # No version constraint. Presence is enough.
         return True
+    from packaging.version import InvalidVersion, Version
+
     try:
         return Version(installed) in req.specifier
     except InvalidVersion:
@@ -640,6 +647,38 @@ def _is_present(spec: str) -> bool:
         return False
     except Exception:
         return False
+
+
+def _run(
+    cmd: list[str],
+    *,
+    timeout: int,
+    env: Optional[dict] = None,
+    check: bool = False,
+):
+    """Run ``cmd`` and capture its output.
+
+    One place for the flags each install command needs: capture the output,
+    decode it without raising on a byte that does not fit the locale, give
+    the child no stdin so a prompt cannot hang the agent, and hide the
+    console window on Windows.
+
+    Call ``subprocess.run`` through the module attribute. The tests replace
+    that attribute to read the argv, so an imported ``run`` would bypass
+    them.
+    """
+    return subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+        env=env,
+        check=check,
+        stdin=subprocess.DEVNULL,
+        creationflags=windows_hide_flags(),
+    )
 
 
 def _write_temp_requirements(lines, prefix: str) -> Optional[Path]:
@@ -770,12 +809,9 @@ def _pip_reassert_overrides(
     if not overrides:
         return None
     try:
-        r = subprocess.run(
+        r = _run(
             pip_cmd + ["install", "--no-deps", *target_args, *overrides],
-            capture_output=True, text=True, encoding='utf-8', errors='replace',
             timeout=timeout,
-            stdin=subprocess.DEVNULL,
-            creationflags=windows_hide_flags(),
         )
     except Exception as e:  # pragma: no cover - defensive
         logger.warning("pip override re-assert failed to run: %s", e)
@@ -852,12 +888,7 @@ def _uv_sync_extra(feature: str) -> Optional[_InstallResult]:
         "--python", sys.executable,
     ]
     try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True, encoding="utf-8",
-            errors="replace", timeout=600, env=env,
-            stdin=subprocess.DEVNULL,
-            creationflags=windows_hide_flags(),
-        )
+        r = _run(cmd, timeout=600, env=env)
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as e:
         logger.debug("uv sync unavailable (%s) — falling back to pip ladder", e)
         return None
@@ -936,11 +967,10 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
             uv_bin = shutil.which("uv")
         if uv_bin:
             try:
-                r = subprocess.run(
-                    [uv_bin, "pip", "install", *target_args, *constraint_args, *override_args, *specs],
-                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout, env=uv_env,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=windows_hide_flags(),
+                r = _run(
+                    [uv_bin, "pip", "install", *target_args,
+                     *constraint_args, *override_args, *specs],
+                    timeout=timeout, env=uv_env,
                 )
                 if r.returncode == 0:
                     if target is not None:
@@ -953,32 +983,24 @@ def _venv_pip_install(specs: tuple[str, ...], *, timeout: int = 300) -> _Install
         # Tier 2: python -m pip (with ensurepip bootstrap if needed)
         pip_cmd = [sys.executable, "-m", "pip"]
         try:
-            probe = subprocess.run(
-                pip_cmd + ["--version"],
-                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=15,
-                stdin=subprocess.DEVNULL,
-                creationflags=windows_hide_flags(),
-            )
+            probe = _run(pip_cmd + ["--version"], timeout=15)
             if probe.returncode != 0:
                 raise FileNotFoundError("pip not in venv")
         except (subprocess.TimeoutExpired, FileNotFoundError):
             try:
-                subprocess.run(
-                    [sys.executable, "-m", "ensurepip", "--upgrade", "--default-pip"],
-                    capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=120, check=True,
-                    stdin=subprocess.DEVNULL,
-                    creationflags=windows_hide_flags(),
+                _run(
+                    [sys.executable, "-m", "ensurepip", "--upgrade",
+                     "--default-pip"],
+                    timeout=120, check=True,
                 )
             except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
                 return _InstallResult(False, "",
                                       f"pip not available and ensurepip failed: {e}")
 
         try:
-            r = subprocess.run(
+            r = _run(
                 pip_cmd + ["install", *target_args, *constraint_args, *specs],
-                capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=timeout,
-                stdin=subprocess.DEVNULL,
-                creationflags=windows_hide_flags(),
+                timeout=timeout,
             )
             if r.returncode == 0:
                 # pip has no --overrides, so a backend whose metadata caps a
