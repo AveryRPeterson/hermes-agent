@@ -14,6 +14,8 @@ from hermes_cli.install_manifest import (
     CHANNEL_STABLE,
     MODE_BUNDLED,
     MODE_SOURCE,
+    STYLE_EJECTED,
+    is_ejected,
     read_install_manifest,
     write_install_manifest,
 )
@@ -79,6 +81,9 @@ class TestEjectBundled:
         manifest = read_install_manifest(bundled_checkout)
         assert manifest["installMode"] == MODE_SOURCE
         assert manifest["channel"] == CHANNEL_MAIN  # default eject channel
+        # Sticky opt-out for silent auto-adoption.
+        assert manifest["manageStyle"] == STYLE_EJECTED
+        assert is_ejected(bundled_checkout)
         # Provenance pin survives for forensics.
         assert manifest["pinnedTag"] == "v0.1.0"
         # Full history + tags are now available.
@@ -146,3 +151,6 @@ class TestEjectOnSourceInstalls:
         manifest = read_install_manifest(root)
         assert manifest["installMode"] == MODE_SOURCE
         assert manifest["channel"] == CHANNEL_STABLE
+        # A channel switch on a never-desktop-managed checkout is NOT an
+        # adoption opt-out — the checkout stays adoptable.
+        assert not is_ejected(root)

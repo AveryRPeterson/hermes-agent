@@ -3773,6 +3773,7 @@ def cmd_update_eject(args) -> int:
         CHANNEL_MAIN,
         CHANNEL_STABLE,
         MODE_SOURCE,
+        STYLE_EJECTED,
         install_manifest_path,
         read_install_manifest,
         write_install_manifest,
@@ -3792,6 +3793,10 @@ def cmd_update_eject(args) -> int:
         if getattr(args, "channel", None):
             manifest["installMode"] = MODE_SOURCE
             manifest["channel"] = channel
+            # Deliberately NOT marking ejected here: this shorthand runs on
+            # checkouts that were never desktop-managed (or already ejected —
+            # in which case the existing style is preserved below). A plain
+            # channel switch is not an adoption opt-out.
             write_install_manifest(manifest, project_root)
             print(f"✓ Install is already source-managed; channel set to '{channel}'.")
         else:
@@ -3842,6 +3847,9 @@ def cmd_update_eject(args) -> int:
 
     manifest["installMode"] = MODE_SOURCE
     manifest["channel"] = channel
+    # Sticky opt-out: auto-adoption must never silently pull an ejected
+    # checkout back into the bundled path.
+    manifest["manageStyle"] = STYLE_EJECTED
     # The tag pin describes the *bundled* payload provenance; keep it for
     # forensics but it no longer governs updates once mode is source.
     write_install_manifest(manifest, project_root)
