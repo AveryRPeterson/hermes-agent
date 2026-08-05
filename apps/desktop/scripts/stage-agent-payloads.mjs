@@ -254,10 +254,33 @@ export function buildManifest({ tag, commit, target, staged, skipped }) {
 // ─── impure staging steps (they shell out, have no unit tests, and run in CI) ──────
 
 function run(cmd, args, opts = {}) {
+  // stdio: inherit — subprocess output (pip's resolution errors, uv's
+  // install messages) streams to the build log in real time. The throw
+  // below only names the command; the CAUSE is in the streamed output
+  // directly above it.
   const result = spawnSync(cmd, args, { stdio: "inherit", ...opts })
-  if (result.status !== 0) {
-    throw new Error(`${cmd} ${args.join(" ")} exited ${result.status}`)
+  if (result.error) {
+    throw new Error(`${cmd} did not start: ${result.error.message}`)
   }
+  if (result.status !== 0) {
+    throw new Error(`${cmd} ${args.join(" ")} exited ${result.status} — its error output is printed above`)
+  }
+}
+
+/**
+ * Capture a probe command's stdout for inspection (banner checks). On
+ * failure the captured stderr goes into the thrown error, so probe
+ * failures are never silent.
+ */
+function probe(cmd, args) {
+  const result = spawnSync(cmd, args, { encoding: "utf8" })
+  if (result.error) {
+    throw new Error(`${cmd} did not start: ${result.error.message}`)
+  }
+  if (result.status !== 0) {
+    throw new Error(`${cmd} ${args.join(" ")} exited ${result.status}: ${(result.stderr || "").trim()}`)
+  }
+  return result.stdout
 }
 
 function stageRepo(tag, outDir) {
@@ -301,7 +324,7 @@ function stageUvAndPython(target, outDir) {
 
   // The staged uv must be built FOR the target triple, not merely run on
   // this host (emulation makes a wrong-arch binary run fine here).
-  assertBanner("uv", execSync(`${JSON.stringify(uvStaged)} --version`, { encoding: "utf8" }), expect.uv)
+  assertBanner("uv", probe(uvStaged, ["--version"]), expect.uv)
 
   // --no-bin: staging must not write launcher shims into the build
   // host's ~/.local/bin (it collided with a preexisting python3.11.exe
@@ -310,7 +333,7 @@ function stageUvAndPython(target, outDir) {
 
   // The installed CPython names its architecture in `python -VV`.
   const pythonBinary = findPythonBinary(pythonDir, target)
-  const pythonBanner = execSync(`${JSON.stringify(pythonBinary)} -VV`, { encoding: "utf8" })
+  const pythonBanner = probe(pythonBinary, ["-VV"])
   if (!expect.pythonAny.some((word) => pythonBanner.includes(word))) {
     assertBanner("python", pythonBanner, expect.pythonAny.join("|"))
   }
@@ -435,7 +458,7 @@ function stageNode(target, outDir) {
   const nodeBinary = target.platform === "win32" ? path.join(nodeDir, "node.exe") : path.join(nodeDir, "bin", "node")
   let reportedArch = null
   try {
-    reportedArch = execSync(`${JSON.stringify(nodeBinary)} -p process.arch`, { encoding: "utf8" }).trim()
+    reportedArch = probe(nodeBinary, ["-p", "process.arch"]).trim()
   } catch {
     // Unrunnable on this host — for example an arm64 dist on an x64
     // builder with no emulation. That is not proof of a wrong payload,
