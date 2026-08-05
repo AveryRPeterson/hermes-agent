@@ -4019,7 +4019,7 @@ function Stage-BootstrapMarker  { Write-BootstrapMarker; Write-InstallModeManife
 function Stage-Configure        { Invoke-SetupWizard }
 function Stage-Gateway          { Start-GatewayIfConfigured }
 
-# ─── Offline payload support (-PayloadDir; desktop bundled artifact) ───────
+# --- Offline payload support (-PayloadDir; desktop bundled artifact) ---
 # This section is a mirror of the payload_* helpers in install.sh. Each
 # network-touching stage first tries the payload. A $false return means
 # "fall back to the normal network path". Keep the two scripts in lockstep.
