@@ -11,6 +11,10 @@ from hermes_cli.version_info import (
 )
 
 
+from hermes_cli import __release_date__ as RELEASE_DATE
+from hermes_cli import __version__ as VERSION
+
+
 def setup_function():
     _reset_version_info_cache()
 
@@ -129,7 +133,7 @@ def test_get_version_info_counts_commits_after_semver_tag(tmp_path, monkeypatch)
             ("git", "rev-parse", "HEAD"): "b" * 40,
             ("git", "branch", "--show-current"): "feature/version",
             ("git", "status", "--porcelain"): "",
-            ("git", "rev-list", "--count", "v0.19.0..HEAD"): "3",
+            ("git", "rev-list", "--count", f"v{VERSION}..HEAD"): "3",
             ("git", "log", "-1", "--format=%ct", "HEAD"): "1718662620",
         }[tuple(command)]
         return MagicMock(returncode=0, stdout=f"{output}\n")
@@ -137,7 +141,7 @@ def test_get_version_info_counts_commits_after_semver_tag(tmp_path, monkeypatch)
     with patch("hermes_cli.version_info.subprocess.run", side_effect=run):
         info = get_version_info()
 
-    assert info == VersionInfo("0.19.0", "0.19.0+3", 3, "b" * 40, "feature/version", "git", False, 1718662620)
+    assert info == VersionInfo(VERSION, f"{VERSION}+3", 3, "b" * 40, "feature/version", "git", False, 1718662620)
 
 
 def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkeypatch):
@@ -150,13 +154,13 @@ def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkey
 
     def run(command, **_kwargs):
         calls.append(tuple(command))
-        if tuple(command) == ("git", "rev-list", "--count", "v0.19.0..HEAD"):
+        if tuple(command) == ("git", "rev-list", "--count", f"v{VERSION}..HEAD"):
             return MagicMock(returncode=1, stdout="")
         output = {
             ("git", "rev-parse", "HEAD"): "c" * 40,
             ("git", "branch", "--show-current"): "",
             ("git", "status", "--porcelain"): " M hermes_cli/version_info.py",
-            ("git", "rev-list", "--count", "v2026.7.20..HEAD"): "2",
+            ("git", "rev-list", "--count", f"v{RELEASE_DATE}..HEAD"): "2",
             ("git", "log", "-1", "--format=%ct", "HEAD"): "1718662620",
         }[tuple(command)]
         return MagicMock(returncode=0, stdout=f"{output}\n")
@@ -164,10 +168,10 @@ def test_get_version_info_falls_back_to_legacy_release_date_tag(tmp_path, monkey
     with patch("hermes_cli.version_info.subprocess.run", side_effect=run):
         info = get_version_info()
 
-    assert info.derived_version == "0.19.0+2"
+    assert info.derived_version == f"{VERSION}+2"
     assert info.branch == "cccccccc"
     assert info.dirty is True
-    assert ("git", "rev-list", "--count", "v2026.7.20..HEAD") in calls
+    assert ("git", "rev-list", "--count", f"v{RELEASE_DATE}..HEAD") in calls
 
 
 def test_get_version_info_unknown_when_no_stamp_and_no_git(monkeypatch):
@@ -178,8 +182,8 @@ def test_get_version_info_unknown_when_no_stamp_and_no_git(monkeypatch):
 
     info = get_version_info()
 
-    assert info.base_version == "0.19.0"
-    assert info.derived_version == "0.19.0"
+    assert info.base_version == VERSION
+    assert info.derived_version == VERSION
     assert info.distance is None
     assert info.commit is None
     assert info.source == "unknown"
