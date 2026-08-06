@@ -344,11 +344,16 @@ function stageUvAndPython(target, outDir) {
   // on the Windows test box).
   run("uv", ["python", "install", "--no-bin", "--install-dir", pythonDir, pythonRequest(target)])
 
-  // The installed CPython names its architecture in `python -VV`.
+  // The installed CPython proves its architecture at runtime.
+  // `python -VV` names the arch on Windows ("[MSC v.1944 64 bit (ARM64)]")
+  // but not on Linux/macOS ("[Clang 22.1.3 ]"), so the check asks
+  // platform.machine() — the value the binary itself reports. The
+  // install-directory pattern above already pins the requested build;
+  // this is the runtime backstop.
   const pythonBinary = findPythonBinary(pythonDir, target)
-  const pythonBanner = probe(pythonBinary, ["-VV"])
-  if (!expect.pythonAny.some((word) => pythonBanner.includes(word))) {
-    assertBanner("python", pythonBanner, expect.pythonAny.join("|"))
+  const pythonMachine = probe(pythonBinary, ["-c", "import platform; print(platform.machine())"])
+  if (!expect.pythonAny.some((word) => pythonMachine.includes(word))) {
+    assertBanner("python", pythonMachine, expect.pythonAny.join("|"))
   }
   return pythonBinary
 }
