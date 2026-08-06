@@ -203,17 +203,24 @@ RUN npm install --prefer-offline --no-audit --fetch-retries=5 && \
     done && \
     npm cache clean --force
 
-# ---------- Photon iMessage sidecar deps (baked, NS-606) ----------
-# The photon plugin's Node sidecar needs its own node_modules
-# (spectrum-ts). The install tree is immutable at runtime, so a lazy
-# `npm ci` on first connect would hit EROFS — bake the deps here instead
-# (deterministic installs, NS-559). Layer-cached: only re-runs when the
-# sidecar manifests change.
+# ---------- Node sidecar deps (baked, NS-606) ----------
+# Each Node sidecar needs its own node_modules beside its entry file: Node's
+# ESM resolver reads packages from the directories above the importing file
+# and ignores NODE_PATH. The install tree is immutable at run time, so a lazy
+# `npm ci` on first connect hits EROFS. Bake the deps here instead
+# (deterministic installs, NS-559).
+#
+# Copy the manifests on their own first, so the layer cache keys on those and
+# not on every source edit.
 COPY plugins/platforms/photon/sidecar/package.json \
      plugins/platforms/photon/sidecar/package-lock.json \
      plugins/platforms/photon/sidecar/
-RUN cd plugins/platforms/photon/sidecar && \
-    npm ci --no-audit --fetch-retries=5 && \
+COPY scripts/whatsapp-bridge/package.json \
+     scripts/whatsapp-bridge/package-lock.json \
+     scripts/whatsapp-bridge/
+RUN for sc in plugins/platforms/photon/sidecar scripts/whatsapp-bridge; do \
+      (cd "$sc" && npm ci --no-audit --fetch-retries=5) || exit 1; \
+    done && \
     npm cache clean --force
 
 # ---------- Layer-cached Python dependency install ----------
