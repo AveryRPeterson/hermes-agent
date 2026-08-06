@@ -498,7 +498,14 @@ function stageJsPrebuilt(outDir) {
     throw new Error("no prebuilt JS surfaces found — run the ui-tui/web builds first")
   }
   fs.writeFileSync(listFile, candidates.join("\n") + "\n")
-  run("tar", [
+  // Windows: name System32's bsdtar by full path. A GNU tar earlier on
+  // PATH (Git bash on the GitHub runners) reads "C:" in a path as a
+  // remote host name. bsdtar also has the --zstd support this needs.
+  const tarBin =
+    process.platform === "win32"
+      ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe")
+      : "tar"
+  run(tarBin, [
     "--zstd", "-cf", path.join(outDir, "js-prebuilt.tar.zst"),
     "-C", REPO_ROOT, "-T", listFile,
   ])

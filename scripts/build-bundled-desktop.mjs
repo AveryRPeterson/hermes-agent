@@ -130,8 +130,12 @@ fs.mkdirSync(extractDir, { recursive: true })
 
 console.log(`[build-bundled] payload node: ${version}`)
 run("curl", ["-fsSL", "-o", path.join(work, archive), `https://nodejs.org/dist/${version}/${archive}`])
-// bsdtar (Windows tar.exe) reads .zip too — one extraction path for all three.
-run("tar", ["-xf", path.join(work, archive), "-C", extractDir])
+// Windows: name System32's bsdtar by full path. A GNU tar earlier on
+// PATH (Git bash on the GitHub runners) reads "C:" in the archive path
+// as a remote host name and fails with "Cannot connect to C". bsdtar
+// also reads .zip, so one extraction call covers all three archives.
+const tarBin = process.platform === "win32" ? path.join(process.env.SystemRoot || "C:\\Windows", "System32", "tar.exe") : "tar"
+run(tarBin, ["-xf", path.join(work, archive), "-C", extractDir])
 const [topDir] = fs.readdirSync(extractDir)
 fs.renameSync(path.join(extractDir, topDir), nodeDir)
 
