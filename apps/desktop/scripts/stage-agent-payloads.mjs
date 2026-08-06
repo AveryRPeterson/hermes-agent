@@ -327,7 +327,17 @@ function stageUvAndPython(target, outDir) {
 
   // The staged uv must be built FOR the target triple, not merely run on
   // this host (emulation makes a wrong-arch binary run fine here).
-  assertBanner("uv", probe(uvStaged, ["--version"]), expect.uv)
+  // uv prints its build triple in --version from 0.12 on; an older uv
+  // prints only the version number, which is unverifiable — refuse it
+  // with a message that says so instead of claiming a wrong arch.
+  const uvBanner = probe(uvStaged, ["--version"])
+  if (/^uv \d[\d.]*\s*$/.test(uvBanner.trim())) {
+    throw new Error(
+      `uv: "${uvBanner.trim()}" prints no build triple, so its architecture ` +
+        `cannot be verified. Use uv 0.12 or newer.`
+    )
+  }
+  assertBanner("uv", uvBanner, expect.uv)
 
   // --no-bin: staging must not write launcher shims into the build
   // host's ~/.local/bin (it collided with a preexisting python3.11.exe
