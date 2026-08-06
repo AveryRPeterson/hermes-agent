@@ -93,7 +93,10 @@ export function resolveTargets(platform = process.platform, arch = process.arch)
       uvPython: "windows-aarch64-none",
       // Pinned packages with no published win_arm64 wheel. pip builds
       // these from sdist on the runner (needs MSVC arm64 + Rust).
-      sourceBuild: ["cryptography", "httptools", "ruamel-yaml-clib", "pywinpty"],
+      // pyyaml publishes win_arm64 wheels for cp312+ only — the payload
+      // python is 3.11, so it builds here too (pure fallback when the
+      // libyaml accelerator is unavailable).
+      sourceBuild: ["cryptography", "httptools", "ruamel-yaml-clib", "pywinpty", "pyyaml"],
     },
   }
   const key = `${platform}-${arch}`

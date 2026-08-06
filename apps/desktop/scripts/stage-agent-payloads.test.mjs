@@ -184,5 +184,5 @@ test('source-build exceptions override only-binary for the named packages only',
   const args = wheelDownloadArgs({ wheelsDir: '/w', sourceBuild: winArm.sourceBuild })
   const noBinary = args[args.indexOf('--no-binary') + 1]
   assert.ok(args.indexOf('--no-binary') > args.indexOf('--only-binary'))
-  assert.equal(noBinary, 'cryptography,httptools,ruamel-yaml-clib,pywinpty')
+  assert.equal(noBinary, 'cryptography,httptools,ruamel-yaml-clib,pywinpty,pyyaml')
 })
