@@ -6,9 +6,21 @@ against scripted CDP responses -- independent of the flaky Android Chrome
 devtools socket. Proves the patch's command logic is correct.
 """
 import json
+import os
 import sys
 
-sys.path.insert(0, "/data/data/com.termux/files/home/.hermes/hermes-agent")
+# Robust module resolution: prefer the repo root (two levels up from this
+# file: tools/tests/ -> tools/ -> repo root), so it works from CI checkouts
+# and anywhere the repo lives. Fall back to the known local dev path.
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+_REPO_ROOT = os.path.dirname(os.path.dirname(_THIS_DIR))
+_CANDIDATES = [
+    _REPO_ROOT,
+    "/data/data/com.termux/files/home/.hermes/hermes-agent",
+]
+for _p in _CANDIDATES:
+    if _p not in sys.path and os.path.isdir(os.path.join(_p, "tools")):
+        sys.path.insert(0, _p)
 # Must import the module *after* we can monkeypatch ws_connect; import now:
 import tools.browser_raw_cdp as mod
 
