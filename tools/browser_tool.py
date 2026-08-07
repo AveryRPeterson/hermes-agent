@@ -2464,6 +2464,24 @@ def _run_browser_command(
         timeout = _safe_command_timeout()
     args = args or []
 
+    # ── Raw CDP override (android-arm64 / Termux safe) ──────────────────────
+    # When ``browser.cdp_url`` (or BROWSER_CDP_URL) is configured, drive Chrome
+    # directly over the DevTools Protocol WebSocket. This bypasses the
+    # agent-browser Node subprocess, which cannot run on platforms like
+    # android-arm64 ("Unsupported platform: android-arm64"). The raw backend
+    # implements the same command vocabulary and return shape as agent-browser,
+    # so every high-level tool (navigate/snapshot/click/type/vision/...) works.
+    # NOTE: this must run *before* the agent-browser session machinery below,
+    # which is why we don't reference ``session_info`` here (it isn't built
+    # until later).
+    if not _is_camofox_mode():
+        _cdp_override = _get_cdp_override()
+        if _cdp_override:
+            from tools.browser_raw_cdp import run_raw_cdp_command
+            return run_raw_cdp_command(
+                task_id, command, args, _cdp_override, timeout=timeout or 30.0,
+            )
+
     # Build the command
     try:
         browser_cmd = _find_agent_browser()
