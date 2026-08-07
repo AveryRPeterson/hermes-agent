@@ -11,7 +11,7 @@ Node subprocess, which **cannot execute at all** here
 
 Hermes already supports a ``browser.cdp_url`` config override that should let a
 tool drive *any* Chrome DevTools Protocol endpoint (e.g. the phone's Chrome
-forwarded by the termux-agent-browser project). But ``_run_browser_command``
+forwarded by the android-chrome-cdp-bridge project). But ``_run_browser_command``
 only routed that override to the ``--cdp`` branch for *cloud* Browserbase
 sessions — never for the config override — so the command fell through to
 launching the local ``agent-browser`` and failed.
